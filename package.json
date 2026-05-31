@@ -1,6 +1,7 @@
 {
   "name": "extract-excel",
-  "version": "1.0.0",
+  "version": "1.0.0-dev.1",
+  "private": true,
   "description": "Command-line tool and API to extract Microsoft Excel data.",
   "author": "John Haugabook",
   "license": "MIT",
@@ -41,16 +42,16 @@
     "check": "tsc --noEmit",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run build",
+    "postinstall": "node scripts/find-libreoffice.js",
+    "install-libreoffice": "node scripts/find-libreoffice.js",
     "start": "node dist/cli.js",
     "test": "node dist/cli.js --test"
   },
   "dependencies": {
-    "exceljs": "^4.4.0",
-    "pdfkit": "^0.15.0"
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "@types/pdfkit": "^0.13.4",
     "typescript": "^5.4.0"
   },
   "engines": {

@@ -19,7 +19,8 @@ export type ExtractErrorCode =
   | 'MALFORMED_ACTION'
   | 'NO_WORKBOOK'
   | 'INVALID_ARGUMENT'
-  | 'TEST_FAILED';
+  | 'TEST_FAILED'
+  | 'LIBREOFFICE_NOT_FOUND';
 
 /** Base error for all anticipated, user-facing failures. */
 export class ExtractError extends Error {

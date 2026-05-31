@@ -405,6 +405,22 @@ function unitTests(): UnitTest[] {
       },
     },
     {
+      name: 'pdf: table format is promoted to markdown (renders differ)',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const res = extractRange(sheet, 'A2:B3');
+        // Confirm that the two formats are distinguishably different, so the
+        // table→markdown promotion that dispatch() performs for the pdf target
+        // has observable effect.
+        const md  = renderMarkdown([res]);
+        const tbl = renderTable([res]);
+        assert(md.startsWith('|'),  'markdown is pipe-delimited');
+        assert(tbl.startsWith('+'), 'table has ASCII border');
+        assert(md !== tbl,          'formats produce different output');
+      },
+    },
+    {
       name: 'parser: --action:table sets a format with default stdout',
       category: 'parser',
       opt: 'action',
