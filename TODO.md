@@ -27,7 +27,7 @@ covered by `extract-excel --test`.
 - [ ] Configurable CSV dialect (delimiter, quoting, line endings).
 - [ ] `--action:var` multi-line values (currently joined with `; ` to stay
       assignable) — optional base64 / array modes.
-- [ ] Convert table formatted data outputs to render as markdown when output
+- [x] Convert table formatted data outputs to render as markdown when output
  action is set to `pdf`.
  
 
