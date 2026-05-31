@@ -1,0 +1,6 @@
+{
+  "columnSeparator": " -- ",
+  "blockSeparator": "",
+  "headerDetection": "first-nonempty",
+  "varExport": "auto"
+}

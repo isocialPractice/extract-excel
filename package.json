@@ -1,0 +1,59 @@
+{
+  "name": "extract-excel",
+  "version": "1.0.0",
+  "description": "Command-line tool and API to extract Microsoft Excel data.",
+  "author": "John Haugabook",
+  "license": "MIT",
+  "homepage": "https://github.com/isocialPractice/extract-excel#readme",
+  "bugs": {
+    "url": "https://github.com/isocialPractice/extract-excel/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isocialPractice/extract-excel.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "excel",
+    "xlsx",
+    "csv",
+    "cli",
+    "extract",
+    "spreadsheet"
+  ],
+  "bin": {
+    "extract-excel": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "config.json",
+    "README.md",
+    "scripts",
+    "tests/files"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "check": "tsc --noEmit",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepublishOnly": "npm run clean && npm run build",
+    "start": "node dist/cli.js",
+    "test": "node dist/cli.js --test"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pdfkit": "^0.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/pdfkit": "^0.13.4",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
