@@ -20,7 +20,7 @@ export type ExtractErrorCode =
   | 'NO_WORKBOOK'
   | 'INVALID_ARGUMENT'
   | 'TEST_FAILED'
-  | 'LIBREOFFICE_NOT_FOUND';
+  | 'PYTHON_NOT_FOUND';
 
 /** Base error for all anticipated, user-facing failures. */
 export class ExtractError extends Error {

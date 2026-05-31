@@ -44,8 +44,8 @@ export async function runExtract(
   const loader = options.loadWorkbook ?? defaultLoader;
 
   for (const book of command.books) {
-    // Expose the resolved file path so dispatch() can hand it to LibreOffice
-    // for the pdf target.  Raw CSV sources have no file to export.
+    // Expose the resolved file path so dispatch() can pass it to the Python
+    // PDF script for the pdf target. Raw CSV sources have no file to export.
     ctx.sourcePath =
       book.source.kind === 'file'
         ? path.resolve(cwd, book.source.path)

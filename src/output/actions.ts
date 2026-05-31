@@ -2,10 +2,11 @@
  * Output dispatch: render a book's results and send them to each target.
  *
  * Format resolution per target:
- *   - pdf    : the source workbook is exported directly to PDF via LibreOffice
- *              headless (`libreoffice --headless --convert-to pdf`). Requires
- *              LibreOffice to be installed with `libreoffice` or `soffice` on
- *              the PATH. Raw CSV sources are not supported for this target.
+ *   - pdf    : the source workbook is exported to a styled PDF table via a
+ *              Python 3 script (`scripts/xlsx_to_pdf.py`) using openpyxl and
+ *              reportlab. Python 3 must be installed, along with the packages
+ *              `openpyxl` and `reportlab` (installed automatically by
+ *              `npm install`). Raw CSV sources are not supported for pdf.
  *   - file   : the action's explicit format, else inferred from the extension
  *              (`.csv` => csv, `.md` => markdown), else text.
  *   - stdout : the action's explicit format, else text.
@@ -16,7 +17,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ActionSpec } from '../parser/types';
 import { ExtractConfig } from '../config';
@@ -24,7 +25,7 @@ import { ExtractError } from '../errors';
 import { ExtractionResult } from '../engine/extract';
 import { render, formatFromPath } from './render';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface OutputContext {
   config: ExtractConfig;
@@ -33,7 +34,7 @@ export interface OutputContext {
   /**
    * Resolved absolute path of the source workbook file. Populated only for
    * file-based sources; `undefined` for raw CSV input. Required for the `pdf`
-   * target (LibreOffice export).
+   * target (Python export).
    */
   sourcePath?: string;
 }
@@ -63,7 +64,7 @@ export async function dispatch(
             'The pdf target requires a file-based workbook source; raw CSV input cannot be exported as PDF.',
           );
         }
-        await convertWithLibreOffice(ctx.sourcePath, requirePath(action.pdf, 'pdf'));
+        await convertWithPython(ctx.sourcePath, requirePath(action.pdf, 'pdf'));
         break;
       }
       case 'var': {
@@ -96,45 +97,20 @@ function writeTextFile(filePath: string, text: string): void {
   fs.writeFileSync(filePath, text + '\n', 'utf8');
 }
 
-/** True when the shell or OS could not locate the given command. */
+/** True when the OS could not locate the given executable. */
 function isCommandNotFound(err: unknown): boolean {
-  const e = err as { code?: number | string; stderr?: string; message?: string };
-  // Numeric exit codes: 127 = POSIX "command not found", 9009 = Windows cmd.exe
-  if (e.code === 'ENOENT' || e.code === 127 || e.code === 9009) return true;
-  // Windows puts the human-readable "not recognized" text in stderr/message
-  // rather than relying on a stable exit code across all cmd.exe versions.
-  const text = `${e.stderr ?? ''} ${e.message ?? ''}`;
-  return /is not recognized as an internal or external command/i.test(text) ||
-    /command not found/i.test(text);
+  const e = err as { code?: number | string; message?: string };
+  return e.code === 'ENOENT' || e.code === 127 || e.code === 9009;
 }
 
-/** Well-known default installation paths for LibreOffice per platform. */
-const LIBREOFFICE_COMMON_PATHS: readonly string[] = (() => {
-  switch (process.platform) {
-    case 'win32':
-      return [
-        'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-        'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-      ];
-    case 'darwin':
-      return ['/Applications/LibreOffice.app/Contents/MacOS/soffice'];
-    default:
-      return [
-        '/usr/bin/libreoffice',
-        '/usr/bin/soffice',
-        '/usr/lib/libreoffice/program/soffice',
-      ];
-  }
-})();
-
 /**
- * Return the absolute LibreOffice path written by the postinstall script
- * (`scripts/find-libreoffice.js`), or `null` if the cache is missing/stale.
+ * Return the absolute Python 3 path written by the postinstall script
+ * (`scripts/setup-pdf.js`), or `null` if the cache is missing or stale.
  */
-function cachedLibreOfficePath(): string | null {
+function cachedPythonPath(): string | null {
   try {
-    // Compiled layout: dist/output/actions.js → ../../.libreoffice-path
-    const cachePath = path.join(__dirname, '..', '..', '.libreoffice-path');
+    // Compiled layout: dist/output/actions.js → ../../.python-path
+    const cachePath = path.join(__dirname, '..', '..', '.python-path');
     const p = fs.readFileSync(cachePath, 'utf8').trim();
     return p && fs.existsSync(p) ? p : null;
   } catch {
@@ -143,76 +119,78 @@ function cachedLibreOfficePath(): string | null {
 }
 
 /**
- * Attempt each LibreOffice candidate in order, stopping on first success.
- *
- * Resolution order:
- *   1. Path cached by `npm install` (postinstall script)
- *   2. `libreoffice` / `soffice` via system PATH
- *   3. Common absolute installation paths (runtime fallback)
- *
- * Throws `LIBREOFFICE_NOT_FOUND` when none of the candidates work.
+ * Absolute path to the bundled Python conversion script.
+ * Compiled layout: dist/output/actions.js → ../../scripts/xlsx_to_pdf.py
  */
-async function spawnLibreOffice(sourcePath: string, outDir: string): Promise<void> {
-  const cached   = cachedLibreOfficePath();
-  const absolute = LIBREOFFICE_COMMON_PATHS.filter(
-    (p) => fs.existsSync(p) && p !== cached,
-  );
-  const candidates = [
-    ...(cached ? [cached] : []),
-    'libreoffice',
-    'soffice',
-    ...absolute,
-  ];
-
-  for (const bin of candidates) {
-    // Quote executables whose path contains spaces (common on Windows).
-    const quoted = /\s/.test(bin) ? `"${bin}"` : bin;
-    try {
-      await execAsync(
-        `${quoted} --headless --convert-to pdf --outdir "${outDir}" "${sourcePath}"`,
-      );
-      return;
-    } catch (err) {
-      if (isCommandNotFound(err)) continue;
-      throw err;
-    }
-  }
-
-  throw new ExtractError(
-    'LIBREOFFICE_NOT_FOUND',
-    'LibreOffice was not found on this system.',
-    [
-      'Install LibreOffice: https://www.libreoffice.org/download/libreoffice-still/',
-      'Then run `npm install` to cache its path, or add it to your PATH.',
-      `Default locations: ${LIBREOFFICE_COMMON_PATHS.join(', ')}`,
-    ].join('\n  '),
-  );
+function pdfScriptPath(): string {
+  return path.join(__dirname, '..', '..', 'scripts', 'xlsx_to_pdf.py');
 }
 
 /**
- * Export `sourcePath` to PDF at `outputPath` using LibreOffice headless.
+ * Export `sourcePath` to a styled PDF at `outputPath` using the bundled
+ * Python script (openpyxl + reportlab).
  *
- * LibreOffice always places its output as `<source-stem>.pdf` inside the
- * output directory. If that name differs from the requested `outputPath` the
- * file is renamed to match.
+ * Resolution order for the Python 3 executable:
+ *   1. Path cached by `npm install` (postinstall script)
+ *   2. `python3` via system PATH
+ *   3. `python` via system PATH (Python 3 only — verified by exit code)
+ *
+ * Throws `PYTHON_NOT_FOUND` when no usable Python 3 is available, or when
+ * the required pip packages are missing (script exit code 3).
  */
-async function convertWithLibreOffice(
+async function convertWithPython(
   sourcePath: string,
   outputPath: string,
 ): Promise<void> {
   const absSource = path.resolve(sourcePath);
   const absOutput = path.resolve(outputPath);
-  const outDir = path.dirname(absOutput);
+  const script    = pdfScriptPath();
 
-  fs.mkdirSync(outDir, { recursive: true });
-  await spawnLibreOffice(absSource, outDir);
+  fs.mkdirSync(path.dirname(absOutput), { recursive: true });
 
-  // Rename if LibreOffice's implicit <stem>.pdf differs from the requested path.
-  const stem = path.basename(absSource, path.extname(absSource));
-  const libreOut = path.join(outDir, `${stem}.pdf`);
-  if (path.resolve(libreOut) !== absOutput) {
-    fs.renameSync(libreOut, absOutput);
+  const cached     = cachedPythonPath();
+  const candidates = [...(cached ? [cached] : []), 'python3', 'python'];
+
+  for (const bin of candidates) {
+    try {
+      await execFileAsync(bin, [script, absSource, absOutput], {
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      });
+      return; // success
+    } catch (err) {
+      if (isCommandNotFound(err)) continue;
+
+      const e = err as { code?: number; stderr?: string; message?: string };
+
+      // Exit code 3: the Python script could not import openpyxl or reportlab.
+      if (e.code === 3) {
+        throw new ExtractError(
+          'PYTHON_NOT_FOUND',
+          'Required Python packages (openpyxl, reportlab) are not installed.',
+          [
+            'Run: python3 -m pip install openpyxl reportlab',
+            'Or re-run `npm install` to install them automatically.',
+          ].join('\n  '),
+        );
+      }
+
+      // Any other non-zero exit: surface stderr as the message.
+      throw new ExtractError(
+        'MALFORMED_ACTION',
+        `PDF generation failed: ${e.stderr?.trim() || e.message || String(err)}`,
+      );
+    }
   }
+
+  throw new ExtractError(
+    'PYTHON_NOT_FOUND',
+    'Python 3 was not found on this system.',
+    [
+      'Install Python 3: https://www.python.org/downloads/',
+      'Then run `npm install` to cache its path, or add python3 to your PATH.',
+      'After installing Python, also run: python3 -m pip install openpyxl reportlab',
+    ].join('\n  '),
+  );
 }
 
 /**

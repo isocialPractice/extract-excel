@@ -13,7 +13,7 @@ workbooks in a single command.
 ## Installation
 
 ```bash
-npm install     # also auto-installs LibreOffice when possible (see PDF Export)
+npm install     # also installs Python 3 + openpyxl/reportlab when possible (see PDF Export)
 npm run build
 npm link        # exposes the global `extract-excel` command
 ```
@@ -26,13 +26,13 @@ npm install extract-excel
 
 ### PDF Export prerequisite
 
-`--action:pdf` uses **LibreOffice** in headless mode to convert the source
-workbook to PDF directly — preserving fonts, colours, merged cells, charts,
-and all native Excel formatting.
+`--action:pdf` uses a bundled Python 3 script (`scripts/xlsx_to_pdf.py`) with
+**openpyxl** and **reportlab** to convert the source workbook to a styled PDF
+table — preserving cell values, merged cells, and column proportions.
 
-`npm install` runs `scripts/find-libreoffice.js`, which:
+`npm install` runs `scripts/setup-pdf.js`, which:
 
-1. Checks whether LibreOffice is already on your PATH or at a standard install
+1. Checks whether Python 3 is already on your PATH or at a standard install
    location.
 2. If not found, attempts a silent install via the appropriate package manager
    for your OS:
@@ -40,21 +40,22 @@ and all native Excel formatting.
    | Platform | Method tried first | Fallback |
    | :------- | :----------------- | :------- |
    | Windows  | `winget`           | Chocolatey (`choco`) |
-   | macOS    | `brew --cask`      | — |
-   | Linux    | `apt-get` / `dnf` / `yum` / `zypper` / `pacman` | `snap` |
+   | macOS    | `brew`             | — |
+   | Linux    | `apt-get` / `dnf` / `yum` / `zypper` / `pacman` | — |
 
-3. Caches the resolved path in `.libreoffice-path` so the tool finds it even
-   when LibreOffice is not on the system PATH.
+3. Runs `python3 -m pip install openpyxl reportlab` automatically.
+4. Caches the resolved Python path in `.python-path` so the tool finds it even
+   when Python 3 is not on the system PATH.
 
 If the auto-install is blocked (corporate policy, no package manager, etc.):
 
 ```bash
 # Install manually, then refresh the cache:
-# https://www.libreoffice.org/download/libreoffice-still/
-npm run install-libreoffice
+# https://www.python.org/downloads/
+npm run setup-pdf
 
 # Or suppress the install attempt entirely:
-SKIP_LIBREOFFICE_INSTALL=1 npm install
+SKIP_PDF_SETUP=1 npm install
 ```
 
 ---
@@ -156,9 +157,9 @@ path/name are `file`, `pdf`, and `var`.
 **Formats** — `text` (default), `table`, `csv`, `markdown`. Add one as a
 modifier among the targets (e.g. `--action:file,table`). When writing a file,
 the format is also inferred from the extension (`.csv` → csv, `.md` → markdown).
-**PDF output** exports the source workbook via LibreOffice — the full file,
-with all native Excel formatting intact (fonts, colours, merged cells, charts).
-Format modifiers are ignored for the `pdf` target.
+**PDF output** renders the extracted data as a styled PDF table via a bundled
+Python 3 script (openpyxl + reportlab) — preserving cell values, merged cells,
+and column proportions. Format modifiers are ignored for the `pdf` target.
 
 `var` emits an OS-appropriate, sourceable assignment (Windows `set "..."`,
 PowerShell `$env:..`, POSIX `export ..`) because a child process cannot set a
