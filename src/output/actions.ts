@@ -2,7 +2,9 @@
  * Output dispatch: render a book's results and send them to each target.
  *
  * Format resolution per target:
- *   - pdf    : always markdown table (merged cells spanned) rendered into a PDF.
+ *   - pdf    : the two-pass aligned table rendered into a PDF (honors
+ *              `-o/--orientation`).
+ *   - md     : the same aligned table written to a `.md` text file.
  *   - file   : the action's explicit format, else inferred from the extension
  *              (`.csv` => csv, `.md` => markdown), else text.
  *   - stdout : the action's explicit format, else text.
@@ -14,11 +16,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import PDFDocument from 'pdfkit';
-import { ActionSpec, OutputFormat } from '../parser/types';
+import { ActionSpec, OutputFormat, PageOrientation } from '../parser/types';
 import { ExtractConfig } from '../config';
 import { ExtractError } from '../errors';
 import { ExtractionResult } from '../engine/extract';
-import { render, formatFromPath } from './render';
+import { render, renderAligned, formatFromPath } from './render';
 
 export interface OutputContext {
   config: ExtractConfig;
@@ -45,11 +47,16 @@ export async function dispatch(
         break;
       }
       case 'pdf':
-        // PDF output is always a markdown table per spec.
+        // PDF output is the two-pass aligned table, honoring orientation.
         await writePdf(
           requirePath(action.pdf, 'pdf'),
-          render(results, 'markdown', ctx.config),
+          renderAligned(results),
+          action.orientation,
         );
+        break;
+      case 'md':
+        // The `.md` target writes the same aligned table as plain text.
+        writeTextFile(requirePath(action.md, 'md'), renderAligned(results));
         break;
       case 'var': {
         const text = render(results, 'text', ctx.config);
@@ -81,13 +88,17 @@ function writeTextFile(filePath: string, text: string): void {
   fs.writeFileSync(filePath, text + '\n', 'utf8');
 }
 
-/** Render text (a markdown table) into a simple monospace PDF. */
-function writePdf(filePath: string, text: string): Promise<void> {
+/** Render the aligned table text into a simple monospace PDF. */
+function writePdf(
+  filePath: string,
+  text: string,
+  orientation?: PageOrientation,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     try {
       const dir = path.dirname(path.resolve(filePath));
       fs.mkdirSync(dir, { recursive: true });
-      const doc = new PDFDocument({ margin: 50 });
+      const doc = new PDFDocument({ margin: 50, layout: orientation });
       const stream = fs.createWriteStream(filePath);
       stream.on('finish', resolve);
       stream.on('error', reject);

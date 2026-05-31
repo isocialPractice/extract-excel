@@ -11,6 +11,7 @@ import { runExtract } from './run';
 import { runTests } from './test/runner';
 import { renderHelp } from './help/docs';
 import { formatTestSummary } from './index';
+import { getVersion } from './version';
 import { ExtractError } from './errors';
 
 async function main(argv: string[]): Promise<number> {
@@ -25,6 +26,10 @@ async function main(argv: string[]): Promise<number> {
   switch (command.kind) {
     case 'help':
       process.stdout.write(renderHelp(command) + '\n');
+      return 0;
+
+    case 'version':
+      process.stdout.write(getVersion() + '\n');
       return 0;
 
     case 'test': {

@@ -35,6 +35,11 @@ export interface ExtractionResult {
    * grid (1-based). Used by table/markdown/PDF renderers to span values.
    */
   merges?: RangeAddress[];
+  /**
+   * Whether `--assume-merge` was active for the op that produced this result.
+   * Honored only by the aligned `pdf`/`md` renderer.
+   */
+  assumeMerge?: boolean;
 }
 
 /** Extract a single cell's value. */

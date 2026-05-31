@@ -38,17 +38,20 @@ default, so `extract-excel book.xlsx ...` just works.
 
 ### Options
 
-| Option         | Type            | Description                                       |
-| :------------- | :-------------- | :------------------------------------------------ |
-| `-a, --action` | output:multi    | Direct output (`stdout`, `file`, `pdf`, `var`).   |
-| `-b, --book`   | file:single     | Workbook to extract data from.                    |
-| `-c, --cell`   | extract:single  | Extract a single cell, e.g. `-c A2`.              |
-| `-f, --file`   | output:single   | Write output to a file.                           |
-| `-h, --help`   | app:doc         | Show global (`--help`) or specific help.          |
-| `-r, --range`  | extract:multi   | Extract a range, e.g. `-r A2:F45`.                |
-| `-s, --sheet`  | select:single   | Select a sheet (must follow its workbook).        |
-| `-t, --title`  | extract:multi   | Extract a column by its header title.             |
-| `--test`       | app:test        | Run `global`, `unit`, or `custom` tests.          |
+| Option              | Type           | Description                                               |
+| :------------------ | :------------- | :-------------------------------------------------------- |
+| `-a, --action`      | output:multi   | Direct output (`stdout`, `file`, `pdf`, `md`, `var`).     |
+| `-b, --book`        | file:single    | Workbook to extract data from.                            |
+| `-c, --cell`        | extract:single | Extract a single cell, e.g. `-c A2`.                      |
+| `-f, --file`        | output:single  | Write output to a file (`.pdf`/`.md` route by extension). |
+| `-h, --help`        | app:doc        | Show global (`--help`) or specific help.                  |
+| `-o, --orientation` | switch:string  | PDF page orientation (`landscape` \| `portrait`).         |
+| `-r, --range`       | extract:multi  | Extract a range, e.g. `-r A2:F45`.                        |
+| `-s, --sheet`       | select:single  | Select a sheet (must follow its workbook).                |
+| `-t, --title`       | extract:multi  | Extract a column by its header title.                     |
+| `-v, --version`     | app:doc        | Print the installed version.                              |
+| `--assume-merge`    | switch:bool    | Collapse spanned merge cells in `pdf`/`md` output.        |
+| `--test`            | app:test       | Run `global`, `unit`, or `custom` tests.                  |
 
 ### Rules worth knowing
 
@@ -98,6 +101,15 @@ extract-excel book.xlsx --range sheet --action:table          # aligned grid
 extract-excel book.xlsx --range A1:F20 --file report.csv      # csv inferred
 extract-excel book.xlsx -r sheet:"Pivot" --action:markdown    # markdown table
 
+# Aligned PDF / markdown tables (extension implies the target)
+extract-excel book.xlsx --range sheet --file report.pdf       # pdf target
+extract-excel book.xlsx --range sheet --file report.md        # md target
+extract-excel book.xlsx --range sheet -o landscape --action:pdf report.pdf
+extract-excel book.xlsx --range sheet --assume-merge --file summary.md
+
+# Print the installed version
+extract-excel --version
+
 # Many workbooks, many destinations, one command
 extract-excel a.xlsx -c A1 --file a.txt \
   -b b.xlsx --range B8:AB25 --cell A1 --action:stdout,file b.txt \
@@ -108,7 +120,7 @@ extract-excel a.xlsx -c A1 --file a.txt \
 
 `--action` takes colon-joined **targets** and optional **format** modifiers, and
 routes a workbook's combined output to each target. Targets that need a
-path/name are `file`, `pdf`, and `var`.
+path/name are `file`, `pdf`, `md`, and `var`.
 
 | Form                                            | Meaning                                  |
 | :---------------------------------------------- | :--------------------------------------- |
@@ -117,15 +129,65 @@ path/name are `file`, `pdf`, and `var`.
 | `--action:file,stdout out.txt`                  | File **and** terminal.                   |
 | `--action:table`                                | Terminal, formatted as an aligned table. |
 | `--action:file,csv out.csv`                     | File, formatted as CSV.                  |
+| `--action:pdf report.pdf`                       | Aligned table rendered into a PDF.       |
+| `--action:md report.md`                         | Aligned table written to a `.md` file.   |
 | `--action:file,var var=_n file=out.txt`         | Multiple value targets → `name=value`.   |
 | `--action:pdf,file,var var=_n pdf=s.pdf file=o.txt` | Three targets, each named.           |
 
 **Formats** — `text` (default), `table`, `csv`, `markdown`. Add one as a
-modifier among the targets (e.g. `--action:file,table`). When writing a file,
-the format is also inferred from the extension (`.csv` → csv, `.md` → markdown).
-**PDF output is always a markdown table**, with merged cells (e.g. a header
-spanning `A1:N1`) repeated across their span so the grid stays faithful to the
-Excel layout.
+modifier among the targets (e.g. `--action:file,table`). When writing a plain
+file, the format is also inferred from the extension (`.csv` → csv, `.md` →
+markdown).
+
+#### Aligned tables (`pdf` and `md`)
+
+The `pdf` and `md` targets share one renderer that builds a monospace,
+pipe-bordered table in two passes — first measuring the widest cell in each
+column, then padding every cell to that width so the columns line up:
+
+```text
+| ID | Last Name | Department | Salary |
+|----|-----------|------------|--------|
+| 1  | Doe       | Finance    | 62000  |
+| 2  | Smith     | IT         | 87000  |
+```
+
+A fully empty row splits a sheet into stacked tables, each with its own columns
+and widths, and columns that are empty across a whole table are dropped — so a
+summary block beneath a blank row renders as its own clean table rather than
+being stretched to the grid above it. Only the first table receives a markdown
+header rule.
+
+`--file out.pdf` and `--file out.md` route through this renderer automatically;
+any other final extension (including `out.md.txt`) stays a plain text file.
+
+#### `--assume-merge`
+
+When a cell is merged across several columns, the spanned value repeats in the
+grid (`Total | Total | …`). Pass `--assume-merge` to collapse those repeated
+**text** cells back into one; purely numeric duplicates are left alone:
+
+```text
+# without --assume-merge
+| Headcount | Headcount | 50 | Payroll | Payroll | 4464930 |
+
+# with --assume-merge
+| Headcount | 50 | Payroll | 4464930 |
+```
+
+It accepts an explicit value (`--assume-merge=true` / `--assume-merge=false`) and
+defaults to off. Used once anywhere within a book it applies to every extraction
+in that book; used more than once, place it before each extraction to vary the
+setting.
+
+#### `-o, --orientation`
+
+Sets the PDF page layout to `landscape` or `portrait`. It only affects PDF
+output (a `pdf` target or a `.pdf` file) and is ignored otherwise:
+
+```bash
+extract-excel book.xlsx --range sheet -o landscape --file report.pdf
+```
 
 `var` emits an OS-appropriate, sourceable assignment (Windows `set "..."`,
 PowerShell `$env:..`, POSIX `export ..`) because a child process cannot set a
@@ -185,8 +247,9 @@ const block = extractRange(sheet, 'A2:C13');
 
 Key exports: `extract`, `parse`, `runExtract`, `runTests`, `loadWorkbook`,
 `workbookFromCsvText`, `extractCell`, `extractRange`, `extractTitle`,
-`Workbook`, `Sheet`, address helpers (`parseCell`, `parseRange`, …), and the
-`ExtractError` type for programmatic error handling.
+`render`/`renderAligned` and the other renderers, `getVersion`, `Workbook`,
+`Sheet`, address helpers (`parseCell`, `parseRange`, …), and the `ExtractError`
+type for programmatic error handling.
 
 ---
 

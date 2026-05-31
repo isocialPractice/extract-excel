@@ -15,8 +15,10 @@ import {
   BookJob,
   Command,
   ExtractCommand,
+  ExtractOp,
   HelpCommand,
   OutputFormat,
+  PageOrientation,
   TestCommand,
   defaultAction,
 } from './types';
@@ -33,40 +35,84 @@ const KNOWN_FLAGS: Record<string, string> = {
   '--file': 'file',
   '-h': 'help',
   '--help': 'help',
+  '-o': 'orientation',
+  '--orientation': 'orientation',
   '-r': 'range',
   '--range': 'range',
   '-s': 'sheet',
   '--sheet': 'sheet',
   '-t': 'title',
   '--title': 'title',
+  '-v': 'version',
+  '--version': 'version',
+  '--assume-merge': 'assume-merge',
   '--test': 'test',
 };
 
-const ARG_TARGETS: ActionTarget[] = ['file', 'pdf', 'var'];
-const ALL_TARGETS: ActionTarget[] = ['stdout', 'file', 'pdf', 'var'];
-/** Format modifiers that may appear among `--action:` targets. */
+const ARG_TARGETS: ActionTarget[] = ['file', 'pdf', 'md', 'var'];
+const ALL_TARGETS: ActionTarget[] = ['stdout', 'file', 'pdf', 'md', 'var'];
+/**
+ * Format modifiers that may appear among `--action:` targets. `md` is no longer
+ * a format alias here — it now names the markdown-file output target, so only
+ * the explicit `markdown` token selects the markdown format.
+ */
 const FORMATS: Record<string, OutputFormat> = {
   text: 'text',
   table: 'table',
   csv: 'csv',
   markdown: 'markdown',
-  md: 'markdown',
 };
+
+const ORIENTATIONS: PageOrientation[] = ['landscape', 'portrait'];
 
 interface Flag {
   name: string;
-  /** Text after the first colon, e.g. `file,stdout` for `--action:file,stdout`. */
+  /**
+   * Text after the first `:` or `=` separator, e.g. `file,stdout` for
+   * `--action:file,stdout`, or `false` for `--assume-merge=false`.
+   */
   suffix?: string;
 }
 
-/** Classify a token as a known flag (honoring the `:` suffix form). */
+/** Classify a token as a known flag (honoring the `:` and `=` suffix forms). */
 function classifyFlag(token: string): Flag | null {
   if (!token.startsWith('-')) return null;
+  // Split on whichever of `:` (action targets) or `=` (switch values) comes
+  // first; bare value tokens never start with `-`, so this is unambiguous.
   const colon = token.indexOf(':');
-  const head = colon === -1 ? token : token.slice(0, colon);
+  const equals = token.indexOf('=');
+  const sep =
+    colon === -1 ? equals : equals === -1 ? colon : Math.min(colon, equals);
+  const head = sep === -1 ? token : token.slice(0, sep);
   const name = KNOWN_FLAGS[head];
   if (!name) return null;
-  return { name, suffix: colon === -1 ? undefined : token.slice(colon + 1) };
+  return { name, suffix: sep === -1 ? undefined : token.slice(sep + 1) };
+}
+
+/**
+ * Map a `--file` path to the action target it implies. A trailing `.pdf` or
+ * `.md` extension routes the output through the aligned PDF/markdown renderer;
+ * anything else (including `name.md.txt`, whose final extension is `.txt`) is a
+ * plain text file.
+ */
+function impliedFileTarget(filePath: string): 'pdf' | 'md' | 'file' {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'pdf';
+  if (lower.endsWith('.md')) return 'md';
+  return 'file';
+}
+
+/** Parse a `switch:bool` suffix: bare/absent => true, else `true`/`false`. */
+function parseSwitchBool(suffix: string | undefined, flag: string): boolean {
+  if (suffix === undefined || suffix === '') return true;
+  const lower = suffix.toLowerCase();
+  if (lower === 'true') return true;
+  if (lower === 'false') return false;
+  throw new ExtractError(
+    'INVALID_ARGUMENT',
+    `Option "${flag}" expects true or false, got "${suffix}".`,
+    `Use ${flag}, ${flag}=true, or ${flag}=false.`,
+  );
 }
 
 /**
@@ -109,6 +155,7 @@ export function parse(argv: string[]): Command {
 
   if (firstFlag?.name === 'help') return parseHelp(tokens);
   if (firstFlag?.name === 'test') return parseTest(tokens);
+  if (firstFlag?.name === 'version') return { kind: 'version' };
 
   return parseExtract(tokens);
 }
@@ -159,6 +206,21 @@ function parseTest(tokens: string[]): TestCommand {
   return { kind: 'test', mode: 'global', filters: {} };
 }
 
+/**
+ * Per-book `--assume-merge` bookkeeping. The option is sticky and positional,
+ * but with a convenience rule from the spec: when it appears at most once in a
+ * book it applies to *every* extraction in that book regardless of position;
+ * when it appears more than once each op takes the value active when it parsed.
+ */
+interface MergeState {
+  /** Number of `--assume-merge` occurrences seen in this book. */
+  count: number;
+  /** The currently active (sticky) value, applied to ops as they are parsed. */
+  current: boolean;
+  /** The value of the single occurrence, used by the "applies anywhere" rule. */
+  single: boolean;
+}
+
 function parseExtract(tokens: string[]): ExtractCommand {
   const books: BookJob[] = [];
   let current: BookJob | null = null;
@@ -166,11 +228,20 @@ function parseExtract(tokens: string[]): ExtractCommand {
   let sheetAllowed = false;
   /** Tracks whether the user has customized output (so default stdout drops). */
   const customized = new WeakSet<BookJob>();
+  /** Per-book assume-merge state (see {@link MergeState}). */
+  const mergeState = new WeakMap<BookJob, MergeState>();
 
   const openBook = (path: string): void => {
     current = { source: { kind: 'file', path }, ops: [], action: defaultAction() };
     books.push(current);
+    mergeState.set(current, { count: 0, current: false, single: false });
     sheetAllowed = true;
+  };
+
+  /** Push an op onto a book, tagging it with the active assume-merge state. */
+  const pushOp = (book: BookJob, op: ExtractOp): void => {
+    op.assumeMerge = mergeState.get(book)?.current ?? false;
+    book.ops.push(op);
   };
 
   const requireBook = (what: string): BookJob => {
@@ -196,7 +267,9 @@ function parseExtract(tokens: string[]): ExtractCommand {
     if (spec.format !== undefined) book.action.format = spec.format;
     if (spec.file !== undefined) book.action.file = spec.file;
     if (spec.pdf !== undefined) book.action.pdf = spec.pdf;
+    if (spec.md !== undefined) book.action.md = spec.md;
     if (spec.var !== undefined) book.action.var = spec.var;
+    if (spec.orientation !== undefined) book.action.orientation = spec.orientation;
   };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -240,7 +313,7 @@ function parseExtract(tokens: string[]): ExtractCommand {
         break;
       }
       case 'cell': {
-        requireBook('--cell').ops.push({ type: 'cell', ref: next() });
+        pushOp(requireBook('--cell'), { type: 'cell', ref: next() });
         sheetAllowed = false;
         break;
       }
@@ -249,12 +322,12 @@ function parseExtract(tokens: string[]): ExtractCommand {
         const value = next();
         if (value === 'sheet') {
           // `--range sheet` => the (single) sheet's whole used range.
-          book.ops.push({ type: 'range', usedRange: true });
+          pushOp(book, { type: 'range', usedRange: true });
         } else if (value.startsWith('sheet:')) {
           // `--range sheet:"Name"` => a named sheet's whole used range.
-          book.ops.push({ type: 'range', usedRange: true, sheetName: value.slice(6) });
+          pushOp(book, { type: 'range', usedRange: true, sheetName: value.slice(6) });
         } else {
-          book.ops.push({ type: 'range', ref: value });
+          pushOp(book, { type: 'range', ref: value });
         }
         sheetAllowed = false;
         break;
@@ -268,13 +341,16 @@ function parseExtract(tokens: string[]): ExtractCommand {
           headerRow = parseInt(rowMatch[1], 10);
           i++;
         }
-        book.ops.push({ type: 'title', title: next(), headerRow });
+        pushOp(book, { type: 'title', title: next(), headerRow });
         sheetAllowed = false;
         break;
       }
       case 'file': {
         const book = requireBook('--file');
-        applyAction(book, { targets: ['file'], file: next() });
+        const value = next();
+        // A `.pdf`/`.md` path implies the aligned PDF/markdown target.
+        const target = impliedFileTarget(value);
+        applyAction(book, { targets: [target], [target]: value });
         sheetAllowed = false;
         break;
       }
@@ -286,9 +362,46 @@ function parseExtract(tokens: string[]): ExtractCommand {
         sheetAllowed = false;
         break;
       }
-      default:
-        // help/test handled before parseExtract; nothing else should reach here.
+      case 'assume-merge': {
+        const book = requireBook('--assume-merge');
+        const value = parseSwitchBool(flag.suffix, '--assume-merge');
+        const state = mergeState.get(book);
+        if (state) {
+          state.count++;
+          state.current = value;
+          state.single = value;
+        }
+        sheetAllowed = false;
         break;
+      }
+      case 'orientation': {
+        const book = requireBook('--orientation');
+        const value = next().toLowerCase();
+        if (!ORIENTATIONS.includes(value as PageOrientation)) {
+          throw new ExtractError(
+            'INVALID_ARGUMENT',
+            `Option "${token}" expects landscape or portrait, got "${value}".`,
+            'Page orientation only applies to PDF output.',
+          );
+        }
+        // Route through applyAction so the value survives the implicit-stdout
+        // reset that the first explicit output option performs.
+        applyAction(book, { targets: [], orientation: value as PageOrientation });
+        sheetAllowed = false;
+        break;
+      }
+      default:
+        // help/test/version handled before parseExtract; nothing reaches here.
+        break;
+    }
+  }
+
+  // Apply the "used at most once => applies to every op in the book" rule.
+  for (const book of books) {
+    const state = mergeState.get(book);
+    if (state && state.count <= 1) {
+      const value = state.count === 1 ? state.single : false;
+      for (const op of book.ops) op.assumeMerge = value;
     }
   }
 
@@ -359,7 +472,7 @@ function parseActionArgs(
   } else if (argTargets.length > 1) {
     const seen = new Set<ActionTarget>();
     for (let idx = start; idx < tokens.length; idx++) {
-      const m = /^(file|pdf|var)=(.+)$/.exec(tokens[idx]);
+      const m = /^(file|pdf|md|var)=(.+)$/.exec(tokens[idx]);
       if (!m) break;
       setTarget(spec, m[1] as ActionTarget, m[2]);
       seen.add(m[1] as ActionTarget);
@@ -382,5 +495,6 @@ function parseActionArgs(
 function setTarget(spec: ActionSpec, target: ActionTarget, value: string): void {
   if (target === 'file') spec.file = value;
   else if (target === 'pdf') spec.pdf = value;
+  else if (target === 'md') spec.md = value;
   else if (target === 'var') spec.var = value;
 }

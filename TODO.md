@@ -8,12 +8,19 @@ covered by `extract-excel --test`.
 - [x] Bespoke CLI tokenizer (default book, repeating `-b`, sticky `-s/--sheet`).
 - [x] Cell / range / title extraction with A1 normalization.
 - [x] Multi-workbook, multi-destination routing in one command.
-- [x] Output targets: `stdout`, `file`, `pdf`, `var`.
+- [x] Output targets: `stdout`, `file`, `pdf`, `md`, `var`.
 - [x] Output formats: `text`, `table`, `csv`, `markdown` (+ extension inference).
 - [x] `--range sheet` / `-r sheet:"Name"` used-range preset.
-- [x] PDF export as a markdown table with merged-cell spanning.
+- [x] `pdf`/`md` two-pass aligned table (measure column widths, then pad). A
+      blank row stacks a sheet into separate aligned tables; empty columns drop.
+- [x] `--file out.pdf` / `--file out.md` imply the `pdf` / `md` target by
+      extension (a non-`.md`/`.pdf` final extension stays a plain text file).
+- [x] `--assume-merge` collapses repeated text from spanned merges in `pdf`/`md`
+      output (numeric duplicates kept); sticky/positional per book.
+- [x] `-o/--orientation` for PDF page layout (`landscape` / `portrait`).
 - [x] `--action:var` capture helpers for bash / cmd / PowerShell.
 - [x] Built-in `--test` runner (global / unit / custom, with filters + replay).
+- [x] `-v/--version` flag.
 - [x] Public API mirroring the CLI engine, shipped with `.d.ts` types.
 
 ## Next
@@ -27,9 +34,6 @@ covered by `extract-excel --test`.
 - [ ] Configurable CSV dialect (delimiter, quoting, line endings).
 - [ ] `--action:var` multi-line values (currently joined with `; ` to stay
       assignable) — optional base64 / array modes.
-- [ ] Convert table formatted data outputs to render as markdown when output
- action is set to `pdf`.
- 
 
 ### Extraction
 
@@ -47,7 +51,6 @@ covered by `extract-excel --test`.
 ### CLI / DX
 
 - [ ] Per-option specific help (`--help range`, `--help action`).
-- [ ] `--version` flag.
 - [ ] Shell completion scripts.
 - [ ] Stricter validation errors with suggested corrections.
 

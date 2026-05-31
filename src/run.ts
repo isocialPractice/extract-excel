@@ -72,6 +72,17 @@ export function runOp(
   sheet: Sheet,
   config: ExtractConfig,
 ): ExtractionResult {
+  const result = runOpInner(op, sheet, config);
+  // Carry the op's assume-merge state onto the result for the aligned renderer.
+  result.assumeMerge = op.assumeMerge ?? false;
+  return result;
+}
+
+function runOpInner(
+  op: ExtractOp,
+  sheet: Sheet,
+  config: ExtractConfig,
+): ExtractionResult {
   switch (op.type) {
     case 'cell':
       return extractCell(sheet, op.ref);
