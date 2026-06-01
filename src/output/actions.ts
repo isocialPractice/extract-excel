@@ -6,6 +6,15 @@
  *              headless (`libreoffice --headless --convert-to pdf`). Requires
  *              LibreOffice to be installed with `libreoffice` or `soffice` on
  *              the PATH. Raw CSV sources are not supported for this target.
+ *              When a sheet is selected (`-s/--sheet`), an orientation is set
+ *              (`-o/--orientation`), or `--fit` is requested, the workbook is
+ *              first rewritten with only the selected sheet and the requested
+ *              page setup, then that copy is exported — so the PDF honors the
+ *              sheet selection and page layout instead of defaulting to the
+ *              workbook's first sheet.
+ *   - md     : the two-pass aligned table (same layout the table renderer uses
+ *              for the terminal, padded to line up) written to a `.md` file.
+ *              `--assume-merge` collapses spanned-merge text in this output.
  *   - file   : the action's explicit format, else inferred from the extension
  *              (`.csv` => csv, `.md` => markdown), else text.
  *   - stdout : the action's explicit format, else text.
@@ -15,14 +24,16 @@
  *              capture helpers under `scripts/`).
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ActionSpec } from '../parser/types';
+import ExcelJS from 'exceljs';
+import { ActionSpec, PageOrientation } from '../parser/types';
 import { ExtractConfig } from '../config';
 import { ExtractError } from '../errors';
 import { ExtractionResult } from '../engine/extract';
-import { render, formatFromPath } from './render';
+import { render, renderAligned, formatFromPath } from './render';
 
 const execAsync = promisify(exec);
 
@@ -36,6 +47,11 @@ export interface OutputContext {
    * target (LibreOffice export).
    */
   sourcePath?: string;
+  /**
+   * Selected sheet name for this book (`-s/--sheet`), if any. Used by the pdf
+   * target to export the requested sheet rather than the workbook's first.
+   */
+  sheet?: string;
 }
 
 /** Dispatch one book's results to all of its targets. */
@@ -63,9 +79,17 @@ export async function dispatch(
             'The pdf target requires a file-based workbook source; raw CSV input cannot be exported as PDF.',
           );
         }
-        await convertWithLibreOffice(ctx.sourcePath, requirePath(action.pdf, 'pdf'));
+        await exportPdf(ctx.sourcePath, requirePath(action.pdf, 'pdf'), {
+          sheet: ctx.sheet,
+          orientation: action.orientation,
+          fit: action.fit,
+        });
         break;
       }
+      case 'md':
+        // The `.md` target writes the aligned table as plain markdown text.
+        writeTextFile(requirePath(action.md, 'md'), renderAligned(results));
+        break;
       case 'var': {
         const text = render(results, 'text', ctx.config);
         ctx.write(renderVarExport(requireName(action.var), text, ctx.config) + '\n');
@@ -94,6 +118,149 @@ function writeTextFile(filePath: string, text: string): void {
   const dir = path.dirname(path.resolve(filePath));
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(filePath, text + '\n', 'utf8');
+}
+
+/** PDF export options resolved from the action (and book sheet selection). */
+interface PdfOptions {
+  /** Sheet to isolate before export; defaults to the workbook's first sheet. */
+  sheet?: string;
+  /** Page orientation to apply to the exported sheet. */
+  orientation?: PageOrientation;
+  /** When true, scale the exported sheet to a single PDF page. */
+  fit?: boolean;
+}
+
+/**
+ * Export a workbook to PDF via LibreOffice.
+ *
+ * With no sheet selection or page-setup options the source workbook is
+ * converted directly, preserving maximum rendering fidelity. Otherwise the
+ * workbook is rewritten to a temporary copy that contains only the selected
+ * sheet with the requested orientation / fit, and that copy is exported — this
+ * is what makes `-s/--sheet`, `-o/--orientation`, and `--fit` take effect on a
+ * real LibreOffice render.
+ */
+async function exportPdf(
+  sourcePath: string,
+  outputPath: string,
+  opts: PdfOptions,
+): Promise<void> {
+  const needsPreprocess = !!opts.sheet || !!opts.orientation || !!opts.fit;
+  if (!needsPreprocess) {
+    await convertWithLibreOffice(sourcePath, outputPath);
+    return;
+  }
+
+  const prepared = await buildPreparedWorkbook(sourcePath, opts);
+  try {
+    await convertWithLibreOffice(prepared, outputPath);
+  } finally {
+    fs.rmSync(prepared, { force: true });
+  }
+}
+
+/**
+ * Rewrite `sourcePath` to a temporary `.xlsx` that contains only the selected
+ * sheet, with the requested page setup applied. LibreOffice honors the embedded
+ * page setup (orientation, fit-to-page) when it converts to PDF.
+ */
+async function buildPreparedWorkbook(
+  sourcePath: string,
+  opts: PdfOptions,
+): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(sourcePath);
+
+  const target = resolveWorksheet(wb, sourcePath, opts.sheet);
+
+  // Collapse formulas to their cached values *before* dropping the other sheets.
+  // Once a referenced sheet is gone, LibreOffice would recompute a cross-sheet
+  // formula to #REF!/#NAME? on load; freezing the last-computed value keeps the
+  // number and guarantees no error text reaches the PDF (see flattenFormulas).
+  flattenFormulas(target);
+
+  // Drop every other sheet so LibreOffice exports only the selected one.
+  for (const ws of [...wb.worksheets]) {
+    if (ws.id !== target.id) wb.removeWorksheet(ws.id);
+  }
+
+  // Merge the requested page setup over whatever the sheet already defines.
+  target.pageSetup = {
+    ...target.pageSetup,
+    ...(opts.orientation ? { orientation: opts.orientation } : {}),
+    ...(opts.fit ? { fitToPage: true, fitToWidth: 1, fitToHeight: 1 } : {}),
+  };
+
+  const tmp = path.join(
+    os.tmpdir(),
+    `extract-excel-${process.pid}-${Date.now()}.xlsx`,
+  );
+  await wb.xlsx.writeFile(tmp);
+  return tmp;
+}
+
+/** Resolve the worksheet to export, honoring `--sheet` (case-insensitive). */
+function resolveWorksheet(
+  wb: ExcelJS.Workbook,
+  sourcePath: string,
+  sheet?: string,
+): ExcelJS.Worksheet {
+  if (sheet !== undefined) {
+    const found = wb.worksheets.find(
+      (ws) => ws.name.toLowerCase() === sheet.toLowerCase(),
+    );
+    if (!found) {
+      throw new ExtractError(
+        'SHEET_NOT_FOUND',
+        `Sheet "${sheet}" not found in "${sourcePath}".`,
+        `Available sheets: ${wb.worksheets.map((ws) => `"${ws.name}"`).join(', ')}`,
+      );
+    }
+    return found;
+  }
+  const first = wb.worksheets[0];
+  if (!first) {
+    throw new ExtractError('UNREADABLE_WORKBOOK', `"${sourcePath}" has no sheets.`);
+  }
+  return first;
+}
+
+/**
+ * Replace every formula cell on `ws` with its last-computed value, and blank
+ * out any cell whose value is a spreadsheet error (`#NAME?`, `#REF!`, `#DIV/0!`,
+ * …) or has no result.
+ *
+ * Two things make this necessary for the PDF export:
+ *   - We isolate a single sheet, so a formula referencing a dropped sheet would
+ *     otherwise recompute to `#REF!`/`#NAME?`. Freezing the cached result keeps
+ *     the value the workbook last calculated.
+ *   - Cells with no value (or an error result) should render empty rather than
+ *     printing the raw error text in the PDF.
+ *
+ * The cached result is exactly what Excel/LibreOffice last computed, so a static
+ * PDF shows the expected number; cell styles (number formats, fills) are stored
+ * separately and survive reassigning the value.
+ */
+export function flattenFormulas(ws: ExcelJS.Worksheet): void {
+  ws.eachRow({ includeEmpty: false }, (row) => {
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      if (cell.type === ExcelJS.ValueType.Formula) {
+        cell.value = cleanCellResult((cell.value as ExcelJS.CellFormulaValue).result);
+      } else if (cell.type === ExcelJS.ValueType.Error) {
+        cell.value = null;
+      }
+    });
+  });
+}
+
+/** Keep a real (non-error) formula result; map errors/empties to a blank cell. */
+function cleanCellResult(result: unknown): ExcelJS.CellValue {
+  if (result === undefined || result === null) return null;
+  // exceljs models an error result as `{ error: '#NAME?' }`.
+  if (typeof result === 'object' && result !== null && 'error' in result) {
+    return null;
+  }
+  return result as ExcelJS.CellValue;
 }
 
 /** True when the shell or OS could not locate the given command. */

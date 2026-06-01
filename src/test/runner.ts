@@ -10,6 +10,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import ExcelJS from 'exceljs';
 import { TestCommand, BookSource, ExtractCommand } from '../parser/types';
 import { parse, splitArgString } from '../parser/tokenizer';
 import { runExtract } from '../run';
@@ -21,7 +22,15 @@ import {
   extractUsedRange,
   extractTitle,
 } from '../engine/extract';
-import { renderText, renderCsv, renderTable, renderMarkdown } from '../output/render';
+import {
+  renderText,
+  renderCsv,
+  renderTable,
+  renderMarkdown,
+  renderAligned,
+} from '../output/render';
+import { ExtractionResult } from '../engine/extract';
+import { flattenFormulas } from '../output/actions';
 import {
   columnToNumber,
   numberToColumn,
@@ -232,7 +241,11 @@ function unitTests(): UnitTest[] {
         const cmd = parse(['file.xlsx', '--cell', 'A2']) as ExtractCommand;
         assertEqual(cmd.books.length, 1, 'books');
         assertEqual(cmd.books[0].source, { kind: 'file', path: 'file.xlsx' }, 'src');
-        assertEqual(cmd.books[0].ops, [{ type: 'cell', ref: 'A2' }], 'ops');
+        assertEqual(
+          cmd.books[0].ops,
+          [{ type: 'cell', ref: 'A2', assumeMerge: false }],
+          'ops',
+        );
       },
     },
     {
@@ -287,7 +300,11 @@ function unitTests(): UnitTest[] {
       opt: 'title',
       run: () => {
         const cmd = parse(['f.xlsx', '--title', 'row=2', 'March']) as ExtractCommand;
-        assertEqual(cmd.books[0].ops, [{ type: 'title', title: 'March', headerRow: 2 }], 'op');
+        assertEqual(
+          cmd.books[0].ops,
+          [{ type: 'title', title: 'March', headerRow: 2, assumeMerge: false }],
+          'op',
+        );
       },
     },
 
@@ -351,11 +368,15 @@ function unitTests(): UnitTest[] {
       opt: 'range',
       run: () => {
         const a = parse(['f.xlsx', '--range', 'sheet']) as ExtractCommand;
-        assertEqual(a.books[0].ops, [{ type: 'range', usedRange: true }], 'no name');
+        assertEqual(
+          a.books[0].ops,
+          [{ type: 'range', usedRange: true, assumeMerge: false }],
+          'no name',
+        );
         const b = parse(['f.xlsx', '-r', 'sheet:Sales']) as ExtractCommand;
         assertEqual(
           b.books[0].ops,
-          [{ type: 'range', usedRange: true, sheetName: 'Sales' }],
+          [{ type: 'range', usedRange: true, sheetName: 'Sales', assumeMerge: false }],
           'named',
         );
       },
@@ -405,22 +426,6 @@ function unitTests(): UnitTest[] {
       },
     },
     {
-      name: 'pdf: table format is promoted to markdown (renders differ)',
-      category: 'output',
-      opt: 'action',
-      run: () => {
-        const res = extractRange(sheet, 'A2:B3');
-        // Confirm that the two formats are distinguishably different, so the
-        // table→markdown promotion that dispatch() performs for the pdf target
-        // has observable effect.
-        const md  = renderMarkdown([res]);
-        const tbl = renderTable([res]);
-        assert(md.startsWith('|'),  'markdown is pipe-delimited');
-        assert(tbl.startsWith('+'), 'table has ASCII border');
-        assert(md !== tbl,          'formats produce different output');
-      },
-    },
-    {
       name: 'parser: --action:table sets a format with default stdout',
       category: 'parser',
       opt: 'action',
@@ -441,6 +446,223 @@ function unitTests(): UnitTest[] {
         assertEqual(cmd.books[0].action.targets, ['file'], 'targets');
         assertEqual(cmd.books[0].action.format, 'csv', 'format');
         assertEqual(cmd.books[0].action.file, 'out.csv', 'file');
+      },
+    },
+
+    // --- md output target ---
+    {
+      name: 'parser: --action:md sets the md target and path',
+      category: 'parser',
+      opt: 'action',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet', '--action:md', 'out.md']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['md'], 'targets');
+        assertEqual(cmd.books[0].action.md, 'out.md', 'md path');
+      },
+    },
+    {
+      name: 'parser: --file infers md/pdf targets from the extension',
+      category: 'parser',
+      opt: 'file',
+      run: () => {
+        const md = parse(['f.xlsx', '-r', 'sheet', '--file', 'report.md']) as ExtractCommand;
+        assertEqual(md.books[0].action.targets, ['md'], 'md target');
+        assertEqual(md.books[0].action.md, 'report.md', 'md path');
+        const pdf = parse(['f.xlsx', '-r', 'sheet', '-f', 'report.PDF']) as ExtractCommand;
+        assertEqual(pdf.books[0].action.targets, ['pdf'], 'pdf target');
+        assertEqual(pdf.books[0].action.pdf, 'report.PDF', 'pdf path');
+      },
+    },
+    {
+      name: 'parser: --file only implies md when .md is the final extension',
+      category: 'parser',
+      opt: 'file',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet', '--file', 'notes.md.txt']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['file'], 'plain file target');
+        assertEqual(cmd.books[0].action.file, 'notes.md.txt', 'file path');
+      },
+    },
+
+    // --- assume-merge switch ---
+    {
+      name: 'parser: --assume-merge used once applies to every op in the book',
+      category: 'parser',
+      opt: 'assume-merge',
+      run: () => {
+        // Placed after the op, yet still applies (single-occurrence rule).
+        const cmd = parse([
+          'f.xlsx', '-r', 'A1:B2', '-r', 'A3:B4', '--assume-merge',
+        ]) as ExtractCommand;
+        assertEqual(cmd.books[0].ops.map((o) => o.assumeMerge), [true, true], 'both true');
+      },
+    },
+    {
+      name: 'parser: repeated --assume-merge is positional per op',
+      category: 'parser',
+      opt: 'assume-merge',
+      run: () => {
+        const cmd = parse([
+          'f.xlsx', '--assume-merge', '-r', 'A1:G2', '--assume-merge=false', '-r', 'A3:G9',
+        ]) as ExtractCommand;
+        assertEqual(cmd.books[0].ops.map((o) => o.assumeMerge), [true, false], 'true then false');
+      },
+    },
+    {
+      name: 'parser: --assume-merge defaults to false when absent',
+      category: 'parser',
+      opt: 'assume-merge',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet']) as ExtractCommand;
+        assertEqual(cmd.books[0].ops[0].assumeMerge, false, 'default false');
+      },
+    },
+
+    // --- orientation ---
+    {
+      name: 'parser: --orientation sets the PDF page layout',
+      category: 'parser',
+      opt: 'orientation',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet', '-o', 'Landscape', '-f', 'x.pdf']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.orientation, 'landscape', 'orientation');
+      },
+    },
+    {
+      name: 'parser: --orientation rejects an invalid value',
+      category: 'parser',
+      opt: 'orientation',
+      run: () => {
+        let threw = false;
+        try {
+          parse(['f.xlsx', '-r', 'sheet', '--orientation', 'sideways']);
+        } catch {
+          threw = true;
+        }
+        assert(threw, 'expected an error for an invalid orientation');
+      },
+    },
+
+    // --- fit (libre-office PDF: scale sheet to one page) ---
+    {
+      name: 'parser: --fit sets the PDF fit flag',
+      category: 'parser',
+      opt: 'fit',
+      run: () => {
+        const on = parse(['f.xlsx', '-r', 'sheet', '--fit', '-f', 'x.pdf']) as ExtractCommand;
+        assertEqual(on.books[0].action.fit, true, 'fit true');
+        const off = parse(['f.xlsx', '-r', 'sheet', '--fit=false', '-f', 'x.pdf']) as ExtractCommand;
+        assertEqual(off.books[0].action.fit, false, 'fit false');
+      },
+    },
+    {
+      name: 'parser: --fit survives the implicit-stdout reset (keeps pdf target)',
+      category: 'parser',
+      opt: 'fit',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--fit', '--action:pdf', 'x.pdf']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['pdf'], 'pdf target kept');
+        assertEqual(cmd.books[0].action.fit, true, 'fit retained');
+      },
+    },
+    {
+      name: 'parser: -s/--sheet is carried alongside a pdf export',
+      category: 'parser',
+      opt: 'sheet',
+      run: () => {
+        const cmd = parse([
+          'f.xlsx', '-s', 'Sales Dashboard', '--action:pdf', 'out.pdf',
+        ]) as ExtractCommand;
+        assertEqual(cmd.books[0].sheet, 'Sales Dashboard', 'selected sheet');
+        assertEqual(cmd.books[0].action.targets, ['pdf'], 'pdf target');
+        assertEqual(cmd.books[0].action.pdf, 'out.pdf', 'pdf path');
+      },
+    },
+
+    // --- version ---
+    {
+      name: 'parser: --version returns the version command',
+      category: 'parser',
+      run: () => {
+        assertEqual(parse(['--version']).kind, 'version', 'long flag');
+        assertEqual(parse(['-v']).kind, 'version', 'short flag');
+      },
+    },
+
+    // --- aligned (pdf/md) renderer ---
+    {
+      name: 'render:aligned pads columns and rules only the first header',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const result: ExtractionResult = {
+          kind: 'range',
+          ref: 'A1:B2',
+          rows: [['ID', 'Name'], ['1', 'Anderson']],
+        };
+        const lines = renderAligned([result]).split('\n');
+        assertEqual(lines[0], '| ID | Name     |', 'padded header');
+        assertEqual(lines[1], '|----|----------|', 'header rule');
+        assertEqual(lines[2], '| 1  | Anderson |', 'padded body');
+      },
+    },
+    {
+      name: 'render:aligned splits on a blank row into stacked tables',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const result: ExtractionResult = {
+          kind: 'range',
+          ref: 'A1:B3',
+          rows: [['ID', 'Name'], ['', ''], ['Total', '2']],
+        };
+        const out = renderAligned([result]);
+        // Second sub-table gets no header rule (continuation data).
+        assert(out.includes('| Total | 2 |'), 'second table rendered');
+        const ruleLines = out.split('\n').filter((l) => /^\|[-|]+\|$/.test(l));
+        assertEqual(ruleLines.length, 1, 'exactly one header rule');
+      },
+    },
+    {
+      name: 'render:aligned with assumeMerge collapses repeated text cells',
+      category: 'output',
+      opt: 'assume-merge',
+      run: () => {
+        const rows = [
+          ['Total Employees', 'Total Employees', '50', '', 'Total Payroll', 'Total Payroll', '4464930'],
+        ];
+        const plain = renderAligned([{ kind: 'range', ref: 'r', rows }]);
+        assert(plain.includes('Total Employees | Total Employees'), 'doubled without flag');
+
+        const merged = renderAligned([
+          { kind: 'range', ref: 'r', rows, assumeMerge: true },
+        ]);
+        assert(!merged.includes('Total Employees | Total Employees'), 'text collapsed');
+        assert(merged.includes('| Total Employees | 50 | Total Payroll | 4464930 |'), 'clean row');
+      },
+    },
+
+    // --- pdf: formula flattening for the isolated-sheet export ---
+    {
+      name: 'pdf: flattenFormulas freezes results and blanks errors',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('S');
+        ws.getCell('A1').value = { formula: 'B1+C1', result: 42 };
+        ws.getCell('A2').value = { formula: 'SUM(Other!A1)', result: { error: '#REF!' } };
+        ws.getCell('A3').value = { formula: 'MISSPELLED()', result: { error: '#NAME?' } };
+        ws.getCell('A4').value = { formula: 'IF(B4,B4,"")', result: undefined };
+        ws.getCell('A5').value = 'plain';
+
+        flattenFormulas(ws);
+
+        assertEqual(ws.getCell('A1').value, 42, 'formula frozen to cached value');
+        assertEqual(ws.getCell('A2').value, null, '#REF! blanked');
+        assertEqual(ws.getCell('A3').value, null, '#NAME? blanked');
+        assertEqual(ws.getCell('A4').value, null, 'empty result blanked');
+        assertEqual(ws.getCell('A5').value, 'plain', 'plain value untouched');
       },
     },
   ];

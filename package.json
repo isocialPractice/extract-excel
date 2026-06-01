@@ -1,6 +1,6 @@
 {
   "name": "extract-excel",
-  "version": "1.0.0-dev.1",
+  "version": "2.0.0-dev",
   "private": true,
   "description": "Command-line tool and API to extract Microsoft Excel data.",
   "author": "John Haugabook",

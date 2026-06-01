@@ -20,6 +20,7 @@ import { parse, splitArgString } from './parser/tokenizer';
 import { runExtract, RunOptions } from './run';
 import { runTests, TestReport } from './test/runner';
 import { renderHelp } from './help/docs';
+import { getVersion } from './version';
 import { formatResults } from './output/format';
 import { loadConfig } from './config';
 import { Workbook, Sheet, loadWorkbook, workbookFromCsvText } from './engine/workbook';
@@ -32,6 +33,7 @@ export type { RunOptions } from './run';
 export { runTests } from './test/runner';
 export type { TestReport, TestCaseResult } from './test/runner';
 export { renderHelp } from './help/docs';
+export { getVersion } from './version';
 export { formatResult, formatResults } from './output/format';
 export {
   render,
@@ -39,6 +41,7 @@ export {
   renderCsv,
   renderTable,
   renderMarkdown,
+  renderAligned,
   formatFromPath,
 } from './output/render';
 export { dispatch, renderVarExport } from './output/actions';
@@ -80,6 +83,9 @@ export async function extract(
 
   if (command.kind === 'help') {
     return renderHelp(command);
+  }
+  if (command.kind === 'version') {
+    return getVersion();
   }
   if (command.kind === 'test') {
     const report: TestReport = await runTests(command, { cwd: options.cwd });

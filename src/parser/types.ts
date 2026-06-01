@@ -6,11 +6,19 @@
  * generic flag library.
  */
 
-/** One output destination for a book's aggregated extraction text. */
-export type ActionTarget = 'stdout' | 'file' | 'pdf' | 'var';
+/**
+ * One output destination for a book's aggregated extraction text.
+ *
+ * `pdf` and `md` share the same two-pass aligned-table renderer; they differ
+ * only in their container (a PDF document vs. a `.md` text file).
+ */
+export type ActionTarget = 'stdout' | 'file' | 'pdf' | 'md' | 'var';
 
 /** How extracted data is rendered to a destination. */
 export type OutputFormat = 'text' | 'table' | 'csv' | 'markdown';
+
+/** Page orientation for the `pdf` target (`-o/--orientation`). */
+export type PageOrientation = 'landscape' | 'portrait';
 
 export interface ActionSpec {
   /** Where the book's output is directed. Defaults to `['stdout']`. */
@@ -18,15 +26,29 @@ export interface ActionSpec {
   /**
    * Explicit render format (from an `--action:` modifier such as `table`).
    * When absent the format is inferred per target (e.g. `.csv` => csv,
-   * `pdf` => markdown).
+   * `pdf`/`md` => the aligned table).
    */
   format?: OutputFormat;
   /** Filesystem path for the `file` target. */
   file?: string;
   /** Filesystem path for the `pdf` target. */
   pdf?: string;
+  /** Filesystem path for the `md` target. */
+  md?: string;
   /** Variable name for the `var` target (leading `_` allowed). */
   var?: string;
+  /**
+   * Page orientation for the `pdf` target (`-o/--orientation`). Ignored unless
+   * the book has a PDF output (set or implied via a `.pdf` file).
+   */
+  orientation?: PageOrientation;
+  /**
+   * Fit the exported sheet onto a single PDF page (`--fit`). Ignored unless the
+   * book has a PDF output (set or implied via a `.pdf` file). Specific to this
+   * LibreOffice-backed branch, where the PDF is a real export of the workbook
+   * sheet rather than a reconstructed table.
+   */
+  fit?: boolean;
 }
 
 /**
@@ -34,11 +56,22 @@ export interface ActionSpec {
  *
  * The `range` op also covers the `--range sheet` / `--range sheet:"Name"`
  * presets, which extract a whole sheet's used range (its data bounding box).
+ *
+ * `assumeMerge` records the `--assume-merge` state that was active for this op
+ * (see the tokenizer for the sticky/positional resolution). It only affects the
+ * aligned `pdf`/`md` renderer, which collapses adjacent duplicate text cells
+ * (merge artifacts) when it is set.
  */
 export type ExtractOp =
-  | { type: 'cell'; ref: string }
-  | { type: 'range'; ref?: string; usedRange?: boolean; sheetName?: string }
-  | { type: 'title'; title: string; headerRow?: number };
+  | { type: 'cell'; ref: string; assumeMerge?: boolean }
+  | {
+      type: 'range';
+      ref?: string;
+      usedRange?: boolean;
+      sheetName?: string;
+      assumeMerge?: boolean;
+    }
+  | { type: 'title'; title: string; headerRow?: number; assumeMerge?: boolean };
 
 /** Where a book's data comes from. */
 export type BookSource =
@@ -76,13 +109,22 @@ export interface TestCommand {
   replay?: string;
 }
 
+/** `--version` request. */
+export interface VersionCommand {
+  kind: 'version';
+}
+
 /** An extraction run across one or more books. */
 export interface ExtractCommand {
   kind: 'extract';
   books: BookJob[];
 }
 
-export type Command = HelpCommand | TestCommand | ExtractCommand;
+export type Command =
+  | HelpCommand
+  | TestCommand
+  | VersionCommand
+  | ExtractCommand;
 
 /** Create the default action (terminal output). */
 export function defaultAction(): ActionSpec {

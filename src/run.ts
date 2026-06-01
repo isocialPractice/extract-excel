@@ -44,12 +44,14 @@ export async function runExtract(
   const loader = options.loadWorkbook ?? defaultLoader;
 
   for (const book of command.books) {
-    // Expose the resolved file path so dispatch() can hand it to LibreOffice
-    // for the pdf target.  Raw CSV sources have no file to export.
+    // Expose the resolved file path and selected sheet so dispatch() can hand
+    // them to LibreOffice for the pdf target. Raw CSV sources have no file to
+    // export; the sheet name lets the PDF export isolate the requested sheet.
     ctx.sourcePath =
       book.source.kind === 'file'
         ? path.resolve(cwd, book.source.path)
         : undefined;
+    ctx.sheet = book.sheet;
 
     const workbook = await loader(book.source, cwd);
 
@@ -75,6 +77,17 @@ export async function runExtract(
 
 /** Execute a single extract op against a resolved sheet. */
 export function runOp(
+  op: ExtractOp,
+  sheet: Sheet,
+  config: ExtractConfig,
+): ExtractionResult {
+  const result = runOpInner(op, sheet, config);
+  // Carry the op's assume-merge state onto the result for the aligned renderer.
+  result.assumeMerge = op.assumeMerge ?? false;
+  return result;
+}
+
+function runOpInner(
   op: ExtractOp,
   sheet: Sheet,
   config: ExtractConfig,

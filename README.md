@@ -71,17 +71,21 @@ default, so `extract-excel book.xlsx ...` just works.
 
 ### Options
 
-| Option         | Type            | Description                                       |
-| :------------- | :-------------- | :------------------------------------------------ |
-| `-a, --action` | output:multi    | Direct output (`stdout`, `file`, `pdf`, `var`).   |
-| `-b, --book`   | file:single     | Workbook to extract data from.                    |
-| `-c, --cell`   | extract:single  | Extract a single cell, e.g. `-c A2`.              |
-| `-f, --file`   | output:single   | Write output to a file.                           |
-| `-h, --help`   | app:doc         | Show global (`--help`) or specific help.          |
-| `-r, --range`  | extract:multi   | Extract a range, e.g. `-r A2:F45`.                |
-| `-s, --sheet`  | select:single   | Select a sheet (must follow its workbook).        |
-| `-t, --title`  | extract:multi   | Extract a column by its header title.             |
-| `--test`       | app:test        | Run `global`, `unit`, or `custom` tests.          |
+| Option              | Type            | Description                                            |
+| :------------------ | :-------------- | :----------------------------------------------------- |
+| `-a, --action`      | output:multi    | Direct output (`stdout`, `file`, `pdf`, `md`, `var`).  |
+| `-b, --book`        | file:single     | Workbook to extract data from.                         |
+| `-c, --cell`        | extract:single  | Extract a single cell, e.g. `-c A2`.                   |
+| `-f, --file`        | output:single   | Write output to a file (`.pdf`/`.md` route by ext).    |
+| `-h, --help`        | app:doc         | Show global (`--help`) or specific help.               |
+| `-o, --orientation` | switch:string   | PDF page orientation (`landscape` \| `portrait`).      |
+| `-r, --range`       | extract:multi   | Extract a range, e.g. `-r A2:F45`.                     |
+| `-s, --sheet`       | select:single   | Select a sheet (must follow its workbook).             |
+| `-t, --title`       | extract:multi   | Extract a column by its header title.                  |
+| `-v, --version`     | app:doc         | Print the installed version.                           |
+| `--assume-merge`    | switch:bool     | Collapse spanned merge cells in `md` output.           |
+| `--fit`             | switch:bool     | Fit the exported sheet onto a single PDF page.         |
+| `--test`            | app:test        | Run `global`, `unit`, or `custom` tests.               |
 
 ### Rules worth knowing
 
@@ -123,13 +127,23 @@ extract-excel book.xlsx -s "Monthly Budget" --range B5:N9
 # Output routing
 extract-excel book.xlsx --cell C5 --file out.txt
 extract-excel book.xlsx --cell Z22 --action:file,stdout out.txt
-extract-excel book.xlsx --title "Company Name" -t Phone --action:pdf summary.pdf
 extract-excel book.xlsx --cell Z22 --action:file,var var=_name file=out.txt
 
 # Output formats: text (default), table, csv, markdown
 extract-excel book.xlsx --range sheet --action:table          # aligned grid
 extract-excel book.xlsx --range A1:F20 --file report.csv      # csv inferred
 extract-excel book.xlsx -r sheet:"Pivot" --action:markdown    # markdown table
+
+# Markdown file (aligned table); --assume-merge collapses spanned merges
+extract-excel book.xlsx --range sheet --file summary.md
+extract-excel book.xlsx --range sheet --action:md summary.md --assume-merge
+
+# PDF: a real LibreOffice export of the selected sheet (formatting preserved)
+extract-excel book.xlsx -s "Sales Dashboard" --action:pdf report.pdf
+extract-excel book.xlsx -s "Sales Dashboard" -o landscape --fit --file report.pdf
+
+# Print the installed version
+extract-excel --version
 
 # Many workbooks, many destinations, one command
 extract-excel a.xlsx -c A1 --file a.txt \
@@ -141,7 +155,7 @@ extract-excel a.xlsx -c A1 --file a.txt \
 
 `--action` takes colon-joined **targets** and optional **format** modifiers, and
 routes a workbook's combined output to each target. Targets that need a
-path/name are `file`, `pdf`, and `var`.
+path/name are `file`, `pdf`, `md`, and `var`.
 
 | Form                                            | Meaning                                  |
 | :---------------------------------------------- | :--------------------------------------- |
@@ -150,15 +164,36 @@ path/name are `file`, `pdf`, and `var`.
 | `--action:file,stdout out.txt`                  | File **and** terminal.                   |
 | `--action:table`                                | Terminal, formatted as an aligned table. |
 | `--action:file,csv out.csv`                     | File, formatted as CSV.                  |
+| `--action:md summary.md`                        | Aligned markdown table → `.md` file.     |
+| `--action:pdf report.pdf`                       | LibreOffice export of the sheet → PDF.   |
 | `--action:file,var var=_n file=out.txt`         | Multiple value targets → `name=value`.   |
 | `--action:pdf,file,var var=_n pdf=s.pdf file=o.txt` | Three targets, each named.           |
 
 **Formats** — `text` (default), `table`, `csv`, `markdown`. Add one as a
 modifier among the targets (e.g. `--action:file,table`). When writing a file,
 the format is also inferred from the extension (`.csv` → csv, `.md` → markdown).
-**PDF output** exports the source workbook via LibreOffice — the full file,
+
+**`md` target** — writes a two-pass aligned markdown table (columns padded to
+line up) to a `.md` file. `--assume-merge` (or `=true`/`=false`) collapses the
+repeated text that spanned merges leave behind (numeric duplicates are kept). A
+`--file out.md` path implies `--action:md`; any other extension (including
+`out.md.txt`) stays a plain text file.
+
+**PDF output** exports the source workbook via LibreOffice — the full sheet,
 with all native Excel formatting intact (fonts, colours, merged cells, charts).
-Format modifiers are ignored for the `pdf` target.
+Format modifiers and `--assume-merge` are ignored for the `pdf` target. Three
+options shape the export and apply **only** to PDF (ignored otherwise):
+
+- **`-s/--sheet`** selects which sheet is rendered. Without it the workbook's
+  first sheet is exported; a `--file out.pdf` path implies `--action:pdf`.
+- **`-o/--orientation`** sets the page layout to `landscape` or `portrait`.
+- **`--fit`** scales the selected sheet onto a single PDF page.
+
+Because the export isolates one sheet, **formulas are frozen to their
+last-computed values** before conversion. This keeps cross-sheet references
+correct (they would otherwise become `#REF!`/`#NAME?` once the other sheets are
+dropped), and any cell whose value is empty or an error (`#NAME?`, `#REF!`,
+`#DIV/0!`, …) renders **blank** rather than printing the error text.
 
 `var` emits an OS-appropriate, sourceable assignment (Windows `set "..."`,
 PowerShell `$env:..`, POSIX `export ..`) because a child process cannot set a

@@ -47,7 +47,7 @@ covered by `extract-excel --test`.
 ### CLI / DX
 
 - [ ] Per-option specific help (`--help range`, `--help action`).
-- [ ] `--version` flag.
+- [x] `--version` flag.
 - [ ] Shell completion scripts.
 - [ ] Stricter validation errors with suggested corrections.
 
