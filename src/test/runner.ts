@@ -655,6 +655,9 @@ function unitTests(): UnitTest[] {
         ws.getCell('A3').value = { formula: 'MISSPELLED()', result: { error: '#NAME?' } };
         ws.getCell('A4').value = { formula: 'IF(B4,B4,"")', result: undefined };
         ws.getCell('A5').value = 'plain';
+        ws.getCell('A6').value = { formula: 'B6-B6', result: 0 };
+        ws.getCell('A7').value = { formula: 'IF(1=2,1,"")', result: '' };
+        ws.getCell('A8').value = { formula: 'B8>C8', result: false };
 
         flattenFormulas(ws);
 
@@ -663,6 +666,9 @@ function unitTests(): UnitTest[] {
         assertEqual(ws.getCell('A3').value, null, '#NAME? blanked');
         assertEqual(ws.getCell('A4').value, null, 'empty result blanked');
         assertEqual(ws.getCell('A5').value, 'plain', 'plain value untouched');
+        assertEqual(ws.getCell('A6').value, 0, 'zero result preserved');
+        assertEqual(ws.getCell('A7').value, null, 'empty-string result blanked');
+        assertEqual(ws.getCell('A8').value, false, 'false result preserved');
       },
     },
   ];

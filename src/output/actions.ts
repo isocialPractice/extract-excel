@@ -245,7 +245,10 @@ export function flattenFormulas(ws: ExcelJS.Worksheet): void {
   ws.eachRow({ includeEmpty: false }, (row) => {
     row.eachCell({ includeEmpty: false }, (cell) => {
       if (cell.type === ExcelJS.ValueType.Formula) {
-        cell.value = cleanCellResult((cell.value as ExcelJS.CellFormulaValue).result);
+        // Read `cell.result` rather than `cell.value.result`: exceljs omits the
+        // `result` key from the value object when it is falsy (0, '', false), so
+        // pulling it off `value` would drop a real 0 and blank the cell.
+        cell.value = cleanCellResult(cell.result);
       } else if (cell.type === ExcelJS.ValueType.Error) {
         cell.value = null;
       }
@@ -253,13 +256,22 @@ export function flattenFormulas(ws: ExcelJS.Worksheet): void {
   });
 }
 
-/** Keep a real (non-error) formula result; map errors/empties to a blank cell. */
+/**
+ * Keep a real formula result; map only empties and errors to a blank cell.
+ *
+ * The checks are strict (`===`) on purpose: a result of `0` (or `false`) is a
+ * genuine computed value and must be preserved. Only a missing result, a
+ * spreadsheet error, or a formula that computes to an empty string `""` blanks.
+ */
 function cleanCellResult(result: unknown): ExcelJS.CellValue {
+  // No cached result at all => render blank.
   if (result === undefined || result === null) return null;
   // exceljs models an error result as `{ error: '#NAME?' }`.
   if (typeof result === 'object' && result !== null && 'error' in result) {
     return null;
   }
+  // A formula that computes to an empty string renders blank, but 0/false stay.
+  if (result === '') return null;
   return result as ExcelJS.CellValue;
 }
 

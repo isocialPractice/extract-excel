@@ -192,8 +192,9 @@ options shape the export and apply **only** to PDF (ignored otherwise):
 Because the export isolates one sheet, **formulas are frozen to their
 last-computed values** before conversion. This keeps cross-sheet references
 correct (they would otherwise become `#REF!`/`#NAME?` once the other sheets are
-dropped), and any cell whose value is empty or an error (`#NAME?`, `#REF!`,
-`#DIV/0!`, …) renders **blank** rather than printing the error text.
+dropped). A formula that computes to an empty string or an error (`#NAME?`,
+`#REF!`, `#DIV/0!`, …) renders **blank** rather than printing the error text,
+while real values — including `0` — are preserved.
 
 `var` emits an OS-appropriate, sourceable assignment (Windows `set "..."`,
 PowerShell `$env:..`, POSIX `export ..`) because a child process cannot set a

@@ -50,8 +50,9 @@ Notes:
     --fit set its page layout. All three are ignored without PDF output.
   - --fit (or =true/=false) scales the exported sheet onto a single PDF page.
   - Formulas on the exported sheet are frozen to their last-computed values, so
-    references to other sheets stay correct; cells whose value is empty or an
-    error (#NAME?, #REF!, #DIV/0!, …) render blank instead of printing the error.
+    references to other sheets stay correct; a formula that computes to an empty
+    string or an error (#NAME?, #REF!, #DIV/0!, …) renders blank instead of the
+    error text, while real values — including 0 — are kept.
   - The md target writes a two-pass aligned table to a .md file; --assume-merge
     (or =true/=false) collapses repeated text from spanned merges there (numeric
     duplicates are kept). It does not affect the pdf export.
