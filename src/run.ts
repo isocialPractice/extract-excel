@@ -7,8 +7,14 @@
  * what makes the `--test` runner able to replay commands and capture results.
  */
 import * as path from 'path';
-import { ExtractCommand, BookSource, ExtractOp } from './parser/types';
-import { Workbook, Sheet, loadWorkbook, workbookFromCsvText } from './engine/workbook';
+import { ExtractCommand, BookSource, ExtractOp, ActionSpec, XmlMapping } from './parser/types';
+import {
+  Workbook,
+  Sheet,
+  loadWorkbook,
+  workbookFromCsvText,
+  readXmlMapping,
+} from './engine/workbook';
 import {
   extractCell,
   extractRange,
@@ -55,6 +61,13 @@ export async function runExtract(
 
     const workbook = await loader(book.source, cwd);
 
+    // For XML output, resolve the container tags: a `--xml:root,row` override
+    // layered over the workbook's embedded Excel XML map (when it has one).
+    const xmlMapping =
+      book.action.format === 'xml'
+        ? await resolveXmlMapping(book.action, ctx.sourcePath)
+        : undefined;
+
     // Resolve the book's default sheet lazily so a `--range sheet:"Name"` op can
     // target its own sheet on a multi-sheet workbook without forcing --sheet.
     let defaultSheet: Sheet | null = null;
@@ -68,11 +81,37 @@ export async function runExtract(
         op.type === 'range' && op.sheetName
           ? workbook.resolveSheet(op.sheetName)
           : getDefaultSheet();
-      return runOp(op, sheet, config);
+      const result = runOp(op, sheet, config);
+      if (xmlMapping) result.xmlMapping = xmlMapping;
+      return result;
     });
 
     await dispatch(results, book.action, ctx);
   }
+}
+
+/**
+ * Resolve the effective XML container mapping for a book: the user's
+ * `--xml:root,row` override takes precedence, falling back to the workbook's
+ * embedded Excel XML map. Returns `undefined` when neither supplies a name, so
+ * the renderer uses its sheet-name/`row` defaults.
+ */
+async function resolveXmlMapping(
+  action: ActionSpec,
+  sourcePath: string | undefined,
+): Promise<XmlMapping | undefined> {
+  const override = action.xml;
+  const detected = sourcePath ? await readXmlMapping(sourcePath) : undefined;
+  if (!override && !detected) return undefined;
+  return {
+    root: override?.root ?? detected?.root,
+    row: override?.row ?? detected?.row,
+    // Emit the schema-instance namespace whenever a map or override is in play,
+    // mirroring Excel's own XML export. A detected map supplies its own set.
+    namespaces: detected?.namespaces ?? {
+      'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    },
+  };
 }
 
 /** Execute a single extract op against a resolved sheet. */
@@ -84,6 +123,8 @@ export function runOp(
   const result = runOpInner(op, sheet, config);
   // Carry the op's assume-merge state onto the result for the aligned renderer.
   result.assumeMerge = op.assumeMerge ?? false;
+  // Record the source sheet so structured renderers (xml) can name the output.
+  result.sheetName = sheet.name;
   return result;
 }
 

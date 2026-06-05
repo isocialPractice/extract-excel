@@ -45,6 +45,8 @@ const KNOWN_FLAGS: Record<string, string> = {
   '--title': 'title',
   '-v': 'version',
   '--version': 'version',
+  '-x': 'xml',
+  '--xml': 'xml',
   '--assume-merge': 'assume-merge',
   '--fit': 'fit',
   '--test': 'test',
@@ -62,6 +64,7 @@ const FORMATS: Record<string, OutputFormat> = {
   table: 'table',
   csv: 'csv',
   markdown: 'markdown',
+  xml: 'xml',
 };
 
 const ORIENTATIONS: PageOrientation[] = ['landscape', 'portrait'];
@@ -114,6 +117,36 @@ function parseSwitchBool(suffix: string | undefined, flag: string): boolean {
     `Option "${flag}" expects true or false, got "${suffix}".`,
     `Use ${flag}, ${flag}=true, or ${flag}=false.`,
   );
+}
+
+/** True when `name` is a usable (simple) XML element name. */
+function isValidXmlName(name: string): boolean {
+  return /^[A-Za-z_][\w.-]*$/.test(name);
+}
+
+/**
+ * Parse the optional `--xml:root,row` suffix into a tag-name override. The first
+ * value names the document root, the second the repeating row element; either
+ * may be omitted (`--xml:,Record` overrides only the row). Returns `undefined`
+ * when no suffix is present, and throws on an invalid XML element name.
+ */
+function parseXmlOverride(
+  suffix: string | undefined,
+): { root?: string; row?: string } | undefined {
+  if (suffix === undefined || suffix.trim() === '') return undefined;
+  const [rawRoot, rawRow] = suffix.split(',');
+  const root = rawRoot?.trim() || undefined;
+  const row = rawRow?.trim() || undefined;
+  for (const name of [root, row]) {
+    if (name !== undefined && !isValidXmlName(name)) {
+      throw new ExtractError(
+        'INVALID_ARGUMENT',
+        `Invalid XML tag name "${name}" in --xml.`,
+        'Use --xml:root,row with valid XML element names (letters, digits, _, -, .).',
+      );
+    }
+  }
+  return root === undefined && row === undefined ? undefined : { root, row };
 }
 
 /**
@@ -272,6 +305,7 @@ function parseExtract(tokens: string[]): ExtractCommand {
     if (spec.var !== undefined) book.action.var = spec.var;
     if (spec.orientation !== undefined) book.action.orientation = spec.orientation;
     if (spec.fit !== undefined) book.action.fit = spec.fit;
+    if (spec.xml !== undefined) book.action.xml = spec.xml;
   };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -400,6 +434,22 @@ function parseExtract(tokens: string[]): ExtractCommand {
         sheetAllowed = false;
         break;
       }
+      case 'xml': {
+        // `-x/--xml` is shorthand for the `--action:xml` format modifier. It
+        // selects the XML format but adds no target of its own (routed with an
+        // empty target list, like --orientation/--fit), so a following
+        // --file/--action chooses the destination and a bare --xml falls back
+        // to stdout via the dispatch default. An optional `--xml:root,row`
+        // suffix overrides the detected container tag names.
+        const override = parseXmlOverride(flag.suffix);
+        applyAction(requireBook('--xml'), {
+          targets: [],
+          format: 'xml',
+          ...(override ? { xml: override } : {}),
+        });
+        sheetAllowed = false;
+        break;
+      }
       default:
         // help/test/version handled before parseExtract; nothing reaches here.
         break;
@@ -412,6 +462,15 @@ function parseExtract(tokens: string[]): ExtractCommand {
     if (state && state.count <= 1) {
       const value = state.count === 1 ? state.single : false;
       for (const op of book.ops) op.assumeMerge = value;
+    }
+  }
+
+  // `--xml`/`--action:xml` map a whole sheet by default. With no explicit
+  // extraction op, fall back to the sheet's used range so the header row can
+  // supply the XML field names (`extract-excel file.xlsx --xml`).
+  for (const book of books) {
+    if (book.action.format === 'xml' && book.ops.length === 0) {
+      book.ops.push({ type: 'range', usedRange: true, assumeMerge: false });
     }
   }
 
@@ -457,13 +516,24 @@ function parseActionArgs(
       throw new ExtractError(
         'MALFORMED_ACTION',
         `Unknown action target or format "${t}".`,
-        'Targets: stdout, file, pdf, md, var. Formats: text, table, csv, markdown.',
+        'Targets: stdout, file, pdf, md, var. Formats: text, table, csv, markdown, xml.',
       );
     }
   }
 
-  // A format-only action (e.g. `--action:table`) still defaults to the terminal.
-  if (targets.length === 0) targets.push('stdout');
+  // A format-only action (e.g. `--action:xml`, `--action:table`) names no
+  // destination. If a path follows it (`--action:xml file.xml`) route the output
+  // to that file; otherwise default to the terminal. Bare tokens after the first
+  // argument are otherwise rejected, so this only gives meaning to a form that
+  // previously errored — it never changes an already-valid command.
+  if (targets.length === 0) {
+    const following = tokens[start];
+    if (format && following !== undefined && !following.startsWith('-')) {
+      targets.push('file');
+    } else {
+      targets.push('stdout');
+    }
+  }
 
   const spec: ActionSpec = format ? { targets, format } : { targets };
   const argTargets = targets.filter((t) => ARG_TARGETS.includes(t));

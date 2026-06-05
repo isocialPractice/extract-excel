@@ -9,7 +9,7 @@ covered by `extract-excel --test`.
 - [x] Cell / range / title extraction with A1 normalization.
 - [x] Multi-workbook, multi-destination routing in one command.
 - [x] Output targets: `stdout`, `file`, `pdf`, `var`.
-- [x] Output formats: `text`, `table`, `csv`, `markdown` (+ extension inference).
+- [x] Output formats: `text`, `table`, `csv`, `markdown`, `xml` (+ extension inference).
 - [x] `--range sheet` / `-r sheet:"Name"` used-range preset.
 - [x] PDF export as a markdown table with merged-cell spanning.
 - [x] `--action:var` capture helpers for bash / cmd / PowerShell.

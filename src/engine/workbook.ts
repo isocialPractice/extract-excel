@@ -9,8 +9,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { CellAddress, RangeAddress, parseRange } from './address';
 import { ExtractError, AmbiguousSheetError } from '../errors';
+import { XmlMapping } from '../parser/types';
+
+/** The XML-Schema-instance namespace Excel stamps on its XML-map exports. */
+const XSI_NAMESPACE = 'http://www.w3.org/2001/XMLSchema-instance';
 
 /** A single value-addressable grid. Cells are read by 1-based row/col. */
 export class Sheet {
@@ -138,7 +143,11 @@ function normalizeValue(value: unknown): string | null {
     return obj.richText.map((rt) => (rt as { text?: string }).text ?? '').join('');
   }
   if (typeof obj.hyperlink === 'string') return obj.hyperlink;
-  return String(value);
+  // Spreadsheet error objects (`{ error: '#REF!' }`) and any other cell-value
+  // shape we don't recognise carry no usable text — treat them as empty rather
+  // than stringifying to the useless "[object Object]".
+  if (typeof obj.error === 'string') return obj.error;
+  return null;
 }
 
 /** Build a {@link Sheet} from a 2-D array (used for CSV and raw data). */
@@ -259,4 +268,64 @@ export async function loadWorkbook(filePath: string): Promise<Workbook> {
       `Could not read "${filePath}": ${(err as Error).message}`,
     );
   }
+}
+
+/**
+ * Read the Excel XML-map container tags from a workbook, if it has one.
+ *
+ * Workbooks built with Excel's "XML Source" mapping feature embed the schema at
+ * `xl/xmlMaps.xml`. exceljs does not expose it, so the file is reopened as a zip
+ * (xlsx is a zip) and the map is parsed directly. Returns the root + repeating
+ * (row) element names plus the `xmlns:xsi` namespace that mirrors Excel's own
+ * XML export. Returns `undefined` for any workbook without a usable map — the
+ * common case — so callers fall back to the sheet-name defaults.
+ *
+ * Never throws: a missing entry, a non-zip file, or an unparsable map all yield
+ * `undefined` rather than failing the extraction.
+ */
+export async function readXmlMapping(filePath: string): Promise<XmlMapping | undefined> {
+  try {
+    const buffer = fs.readFileSync(path.resolve(filePath));
+    const zip = await JSZip.loadAsync(buffer);
+    const entry = zip.file('xl/xmlMaps.xml');
+    if (!entry) return undefined;
+    const parsed = parseXmlMap(await entry.async('string'));
+    if (!parsed) return undefined;
+    return { ...parsed, namespaces: { 'xmlns:xsi': XSI_NAMESPACE } };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parse the root and repeating-row element names out of an `xl/xmlMaps.xml`
+ * document.
+ *
+ * The root comes from the `<Map RootElement="...">` attribute; the repeating
+ * row element is the schema element declared `maxOccurs="unbounded"`. Both
+ * lookups tolerate the `xsd:`/`xs:` prefix variants and either attribute order.
+ * Returns `null` when the document does not yield both names.
+ */
+export function parseXmlMap(xml: string): { root: string; row: string } | null {
+  // Every `<element ...>` declaration in the embedded schema, with its attrs.
+  const elements: Array<{ name?: string; unbounded: boolean }> = [];
+  const elementRe = /<(?:[A-Za-z][\w.-]*:)?element\b([^>]*?)\/?>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = elementRe.exec(xml)) !== null) {
+    const attrs = match[1];
+    elements.push({
+      name: /\bname\s*=\s*"([^"]+)"/i.exec(attrs)?.[1],
+      unbounded: /\bmaxOccurs\s*=\s*"unbounded"/i.test(attrs),
+    });
+  }
+
+  // Root: prefer the Map's RootElement attribute, else the first declared element
+  // (the schema's document element).
+  const root =
+    /<Map\b[^>]*\bRootElement\s*=\s*"([^"]+)"/i.exec(xml)?.[1] ??
+    elements.find((e) => e.name)?.name;
+  // Row: the element marked as repeating (maxOccurs="unbounded").
+  const row = elements.find((e) => e.unbounded && e.name)?.name;
+
+  return root && row ? { root, row } : null;
 }
