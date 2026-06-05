@@ -9,12 +9,23 @@
  *     exactly as if it had been passed on the command line.
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { TestCommand, BookSource, ExtractCommand } from '../parser/types';
 import { parse, splitArgString } from '../parser/tokenizer';
 import { runExtract } from '../run';
 import { loadConfig, resetConfigCache } from '../config';
-import { workbookFromCsvText, parseCsv, Workbook, loadWorkbook } from '../engine/workbook';
+import {
+  workbookFromCsvText,
+  parseCsv,
+  Workbook,
+  Sheet,
+  loadWorkbook,
+  readXmlMapping,
+  parseXmlMap,
+} from '../engine/workbook';
 import {
   extractCell,
   extractRange,
@@ -26,6 +37,7 @@ import {
   renderCsv,
   renderTable,
   renderMarkdown,
+  renderXml,
   renderAligned,
 } from '../output/render';
 import { ExtractionResult } from '../engine/extract';
@@ -76,6 +88,52 @@ const SAMPLE_CSV = [
   'Todd Summers, 31',
   'Debbie Carlson, 45',
 ].join('\n');
+
+/** A representative `xl/xmlMaps.xml` as Excel's XML-mapping feature writes it. */
+const SAMPLE_XML_MAPS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<MapInfo xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" SelectionNamespaces="">
+  <Schema ID="Schema1">
+    <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+      <xsd:element name="cardholders">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="CardHolder" minOccurs="0" maxOccurs="unbounded">
+              <xsd:complexType>
+                <xsd:sequence>
+                  <xsd:element name="Name" minOccurs="0" type="xsd:string"/>
+                  <xsd:element name="Number" minOccurs="0" type="xsd:string"/>
+                </xsd:sequence>
+              </xsd:complexType>
+            </xsd:element>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </Schema>
+  <Map ID="1" Name="cardholders_Map" RootElement="cardholders" SchemaID="Schema1"
+    ShowImportExportValidationErrors="false" AutoFit="true" Append="false"
+    PreserveSortAFLayout="true" PreserveFormat="true">
+    <DataBinding DataBindingLoadMode="1"/>
+  </Map>
+</MapInfo>`;
+
+/**
+ * Build a temporary `.xlsx` carrying an embedded Excel XML map. exceljs cannot
+ * write `xl/xmlMaps.xml`, so a normal workbook is generated and the map entry is
+ * injected with jszip — exactly the structure {@link readXmlMapping} parses.
+ */
+async function buildMappedWorkbook(): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('XML');
+  ws.addRow(['Name', 'Number']);
+  ws.addRow(['Flint River Fuel Center', '-']);
+  const zip = await JSZip.loadAsync(await wb.xlsx.writeBuffer());
+  zip.file('xl/xmlMaps.xml', SAMPLE_XML_MAPS);
+  const out = await zip.generateAsync({ type: 'nodebuffer' });
+  const tmp = path.join(os.tmpdir(), `ee-xmlmap-${process.pid}-${Date.now()}.xlsx`);
+  fs.writeFileSync(tmp, out);
+  return tmp;
+}
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -336,6 +394,82 @@ function unitTests(): UnitTest[] {
       },
     },
 
+    // --- xml map detection (Excel XML-mapping feature) ---
+    {
+      name: 'workbook: unrecognised object cell values normalize to empty (no [object Object])',
+      category: 'workbook',
+      run: () => {
+        const sheet = new Sheet('S', [
+          [{ mystery: true }, { error: '#REF!' }, 'ok', { formula: 'A1', result: 0 }],
+        ]);
+        assertEqual(sheet.getValue({ row: 1, col: 1 }), null, 'unknown object -> empty');
+        assertEqual(sheet.getValue({ row: 1, col: 2 }), '#REF!', 'error -> error text');
+        assertEqual(sheet.getValue({ row: 1, col: 3 }), 'ok', 'plain string kept');
+        assertEqual(sheet.getValue({ row: 1, col: 4 }), '0', 'formula result 0 kept');
+      },
+    },
+    {
+      name: 'xmlmap: parseXmlMap reads root + repeating element (order tolerant)',
+      category: 'workbook',
+      run: () => {
+        assertEqual(
+          parseXmlMap(SAMPLE_XML_MAPS),
+          { root: 'cardholders', row: 'CardHolder' },
+          'RootElement + maxOccurs="unbounded"',
+        );
+        const b = parseXmlMap(
+          '<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+            '<xsd:element name="people">' +
+            '<xsd:element maxOccurs="unbounded" name="Person"/>' +
+            '</xsd:element></xsd:schema>',
+        );
+        assertEqual(b, { root: 'people', row: 'Person' }, 'fallback root + attr order');
+        assertEqual(parseXmlMap('<MapInfo/>'), null, 'no usable names => null');
+      },
+    },
+    {
+      name: 'xmlmap: readXmlMapping detects tags from an embedded xl/xmlMaps.xml',
+      category: 'workbook',
+      run: async () => {
+        const file = await buildMappedWorkbook();
+        try {
+          const mapping = await readXmlMapping(file);
+          assert(!!mapping, 'mapping detected from the workbook');
+          assertEqual(mapping?.root, 'cardholders', 'root element');
+          assertEqual(mapping?.row, 'CardHolder', 'row element');
+          assertEqual(
+            mapping?.namespaces?.['xmlns:xsi'],
+            'http://www.w3.org/2001/XMLSchema-instance',
+            'xsi namespace added',
+          );
+        } finally {
+          fs.rmSync(file, { force: true });
+        }
+      },
+    },
+    {
+      name: 'xmlmap: --xml end-to-end uses the detected map tags',
+      category: 'workbook',
+      opt: 'xml',
+      run: async () => {
+        const file = await buildMappedWorkbook();
+        let output = '';
+        try {
+          const cmd = parse([file, '-s', 'XML', '--xml']) as ExtractCommand;
+          await runExtract(cmd, { write: (t) => (output += t) });
+        } finally {
+          fs.rmSync(file, { force: true });
+        }
+        assert(
+          output.includes('<cardholders xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'),
+          'detected root + namespace in output',
+        );
+        assert(output.includes('<CardHolder>'), 'detected row tag in output');
+        assert(output.includes('<Name>Flint River Fuel Center</Name>'), 'record data');
+        assert(output.includes('</cardholders>'), 'root closed');
+      },
+    },
+
     // --- csv parsing ---
     {
       name: 'csv: parses quoted fields with embedded commas',
@@ -424,6 +558,101 @@ function unitTests(): UnitTest[] {
       },
     },
     {
+      name: 'render:xml maps the header row to named fields under a sheet root',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const result: ExtractionResult = {
+          kind: 'range',
+          ref: 'A1:C3',
+          sheetName: 'On Boarding',
+          rows: [
+            ['ID', 'Last Name', 'FT/PT'],
+            ['1', 'A & B', ''],
+            ['2', '<x>', 'PT'],
+          ],
+        };
+        const xml = renderXml([result]);
+        const lines = xml.split('\n');
+        assertEqual(lines[0], '<?xml version="1.0" encoding="UTF-8"?>', 'prolog');
+        assertEqual(lines[1], '<onBoarding>', 'camel-cased sheet root');
+        assertEqual(lines[2], '  <row>', 'first data row (header consumed)');
+        assertEqual(lines[3], '    <ID>1</ID>', 'id field carries data, not "ID"');
+        assertEqual(lines[4], '    <Last_Name>A &amp; B</Last_Name>', 'space sanitized, & escaped');
+        assertEqual(lines[5], '    <FT_PT></FT_PT>', 'slash sanitized, empty open/close');
+        assert(xml.includes('<Last_Name>&lt;x&gt;</Last_Name>'), 'angle brackets escaped');
+        assertEqual(lines[lines.length - 1], '</onBoarding>', 'root close');
+      },
+    },
+    {
+      name: 'render:xml falls back to data root and positional field names',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const result: ExtractionResult = {
+          kind: 'range',
+          ref: 'A1:B2',
+          rows: [['', 'Age'], ['x', '29']],
+        };
+        const lines = renderXml([result]).split('\n');
+        assertEqual(lines[1], '<data>', 'missing sheet name -> data root');
+        assertEqual(lines[3], '    <column_1>x</column_1>', 'blank header -> positional');
+        assertEqual(lines[4], '    <Age>29</Age>', 'named header preserved');
+      },
+    },
+    {
+      name: 'render:xml uses mapped root/row tags + namespaces and skips empty rows',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const result: ExtractionResult = {
+          kind: 'range',
+          ref: 'A1:B4',
+          sheetName: 'XML',
+          xmlMapping: {
+            root: 'cardholders',
+            row: 'CardHolder',
+            namespaces: { 'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance' },
+          },
+          rows: [
+            ['Name', 'Number'],
+            ['Flint River Fuel Center', '-'],
+            ['', ''], // empty row -> skipped, not an empty <CardHolder>
+            ['Acme', '42'],
+          ],
+        };
+        const lines = renderXml([result]).split('\n');
+        assertEqual(
+          lines[1],
+          '<cardholders xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+          'mapped root with namespace',
+        );
+        assertEqual(lines[2], '  <CardHolder>', 'mapped row tag');
+        assertEqual(lines[3], '    <Name>Flint River Fuel Center</Name>', 'field value');
+        const records = lines.filter((l) => l.trim() === '<CardHolder>').length;
+        assertEqual(records, 2, 'two records (blank row skipped)');
+        assertEqual(lines[lines.length - 1], '</cardholders>', 'mapped root close');
+      },
+    },
+    {
+      name: 'render:xml wraps multiple results in an <extract> root',
+      category: 'output',
+      opt: 'action',
+      run: () => {
+        const a: ExtractionResult = {
+          kind: 'range', ref: 'A1:A2', sheetName: 'Data', rows: [['ID'], ['1']],
+        };
+        const b: ExtractionResult = {
+          kind: 'range', ref: 'A1:A2', sheetName: 'On Boarding', rows: [['ID'], ['9']],
+        };
+        const lines = renderXml([a, b]).split('\n');
+        assertEqual(lines[1], '<extract>', 'synthetic wrapper root');
+        assert(lines.includes('  <data>'), 'first sheet nested + indented');
+        assert(lines.includes('  <onBoarding>'), 'second sheet nested + indented');
+        assertEqual(lines[lines.length - 1], '</extract>', 'wrapper close');
+      },
+    },
+    {
       name: 'parser: --action:table sets a format with default stdout',
       category: 'parser',
       opt: 'action',
@@ -456,6 +685,92 @@ function unitTests(): UnitTest[] {
         const cmd = parse(['f.xlsx', '-r', 'sheet', '--action:md', 'out.md']) as ExtractCommand;
         assertEqual(cmd.books[0].action.targets, ['md'], 'targets');
         assertEqual(cmd.books[0].action.md, 'out.md', 'md path');
+      },
+    },
+    {
+      name: 'parser: --xml selects the xml format with default stdout',
+      category: 'parser',
+      opt: 'xml',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--xml']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, [], 'no target of its own');
+        assertEqual(cmd.books[0].action.format, 'xml', 'xml format');
+        const short = parse(['f.xlsx', '-x']) as ExtractCommand;
+        assertEqual(short.books[0].action.format, 'xml', 'short flag xml');
+      },
+    },
+    {
+      name: 'parser: --xml with no op implies a whole-sheet (used range) extraction',
+      category: 'parser',
+      opt: 'xml',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--xml']) as ExtractCommand;
+        assertEqual(
+          cmd.books[0].ops,
+          [{ type: 'range', usedRange: true, assumeMerge: false }],
+          'implied used-range op',
+        );
+        const explicit = parse(['f.xlsx', '-c', 'A1', '--xml']) as ExtractCommand;
+        assertEqual(explicit.books[0].ops.length, 1, 'no extra implied op');
+        assertEqual(explicit.books[0].ops[0].type, 'cell', 'keeps the cell op');
+      },
+    },
+    {
+      name: 'parser: --xml --file routes the xml to the file target',
+      category: 'parser',
+      opt: 'xml',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--xml', '--file', 'out.xml']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['file'], 'file target only');
+        assertEqual(cmd.books[0].action.format, 'xml', 'xml format');
+        assertEqual(cmd.books[0].action.file, 'out.xml', 'file path');
+      },
+    },
+    {
+      name: 'parser: --action:xml writes a following path to a file',
+      category: 'parser',
+      opt: 'action',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet', '--action:xml', 'out.xml']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['file'], 'file target');
+        assertEqual(cmd.books[0].action.format, 'xml', 'xml format');
+        assertEqual(cmd.books[0].action.file, 'out.xml', 'file path');
+        const bare = parse(['f.xlsx', '--cell', 'A1', '--action:xml']) as ExtractCommand;
+        assertEqual(bare.books[0].action.targets, ['stdout'], 'stdout default');
+        assertEqual(bare.books[0].action.format, 'xml', 'xml format');
+      },
+    },
+    {
+      name: 'parser: --xml:root,row overrides the container tag names',
+      category: 'parser',
+      opt: 'xml',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--xml:cardholders,CardHolder']) as ExtractCommand;
+        assertEqual(
+          cmd.books[0].action.xml,
+          { root: 'cardholders', row: 'CardHolder' },
+          'both names overridden',
+        );
+        assertEqual(cmd.books[0].action.format, 'xml', 'still xml format');
+        const rowOnly = parse(['f.xlsx', '--xml:,Record']) as ExtractCommand;
+        assertEqual(rowOnly.books[0].action.xml, { row: 'Record' }, 'row only');
+        let threw = false;
+        try {
+          parse(['f.xlsx', '--xml:bad name']);
+        } catch {
+          threw = true;
+        }
+        assert(threw, 'invalid xml tag name rejected');
+      },
+    },
+    {
+      name: 'parser: --file infers xml format from the extension',
+      category: 'parser',
+      opt: 'file',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-r', 'sheet', '--file', 'out.xml']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['file'], 'file target');
+        assertEqual(cmd.books[0].action.file, 'out.xml', 'file path');
       },
     },
     {

@@ -41,6 +41,7 @@ export {
   renderCsv,
   renderTable,
   renderMarkdown,
+  renderXml,
   renderAligned,
   formatFromPath,
 } from './output/render';
@@ -53,6 +54,8 @@ export {
   loadWorkbook,
   workbookFromCsvText,
   parseCsv,
+  readXmlMapping,
+  parseXmlMap,
 } from './engine/workbook';
 export {
   extractCell,

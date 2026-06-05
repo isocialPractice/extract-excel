@@ -15,10 +15,28 @@
 export type ActionTarget = 'stdout' | 'file' | 'pdf' | 'md' | 'var';
 
 /** How extracted data is rendered to a destination. */
-export type OutputFormat = 'text' | 'table' | 'csv' | 'markdown';
+export type OutputFormat = 'text' | 'table' | 'csv' | 'markdown' | 'xml';
 
 /** Page orientation for the `pdf` target (`-o/--orientation`). */
 export type PageOrientation = 'landscape' | 'portrait';
+
+/**
+ * Element names for the `xml` format's container tags.
+ *
+ * In Excel-mapped workbooks these are detected from the embedded XML map
+ * (`xl/xmlMaps.xml`): `root` is the document root (e.g. `cardholders`) and `row`
+ * is the repeating record element (e.g. `CardHolder`). The user can override
+ * either via `--xml:root,row`. `namespaces` holds root attributes such as
+ * `xmlns:xsi` so the output mirrors Excel's own XML export.
+ */
+export interface XmlMapping {
+  /** Document root element name. Falls back to the camel-cased sheet name. */
+  root?: string;
+  /** Repeating record element name. Falls back to `row`. */
+  row?: string;
+  /** Namespace (and other) attributes to emit on the root element. */
+  namespaces?: Record<string, string>;
+}
 
 export interface ActionSpec {
   /** Where the book's output is directed. Defaults to `['stdout']`. */
@@ -42,6 +60,12 @@ export interface ActionSpec {
    * the book has a PDF output (set or implied via a `.pdf` file).
    */
   orientation?: PageOrientation;
+  /**
+   * User-supplied override of the `xml` container tags (`--xml:root,row`). Only
+   * the names the user provided are set; anything absent falls back to the
+   * detected XML map, then to the sheet-name/`row` defaults.
+   */
+  xml?: { root?: string; row?: string };
 }
 
 /**

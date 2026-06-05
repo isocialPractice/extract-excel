@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "pdfkit": "^0.15.0"
   },
   "devDependencies": {

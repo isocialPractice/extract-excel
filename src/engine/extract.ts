@@ -16,6 +16,7 @@ import {
 } from './address';
 import { ExtractError } from '../errors';
 import { ExtractConfig } from '../config';
+import { XmlMapping } from '../parser/types';
 
 export type ExtractionKind = 'cell' | 'range' | 'title';
 
@@ -40,6 +41,19 @@ export interface ExtractionResult {
    * Honored only by the aligned `pdf`/`md` renderer.
    */
   assumeMerge?: boolean;
+  /**
+   * Name of the sheet this result was extracted from. Set by the runner so
+   * structured renderers can label the data — the `xml` renderer uses it
+   * (camel-cased) as the document's root element name when no XML map applies.
+   */
+  sheetName?: string;
+  /**
+   * Container-tag mapping for the `xml` renderer (root/row element names and
+   * root namespaces), resolved from the workbook's embedded Excel XML map and
+   * any `--xml:root,row` override. Absent => the renderer uses the camel-cased
+   * sheet name and a `<row>` element.
+   */
+  xmlMapping?: XmlMapping;
 }
 
 /** Extract a single cell's value. */

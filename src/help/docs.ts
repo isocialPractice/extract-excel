@@ -28,6 +28,7 @@ const OPTIONS = `Options:
   -s, --sheet        select:single   Select a sheet (must follow its workbook).
   -t, --title        extract:multi   Extract a column by header title.
   -v, --version      app:doc         Print the installed version.
+  -x, --xml          output:single   Output the sheet's mapped table as XML.
       --assume-merge switch:bool     Collapse spanned merge cells in pdf/md output.
       --test         app:test        Run global, unit, or custom tests.
 
@@ -39,9 +40,20 @@ Notes:
   - --action targets: stdout, file, pdf, md, var. Combine with commas
     (--action:file,stdout) and pass multiple paths as name=value
     (--action:file,var var=_name file=out.txt).
-  - --action formats: text (default), table, csv, markdown. Add one as a
-    modifier (--action:file,table). file output also infers csv/markdown
+  - --action formats: text (default), table, csv, markdown, xml. Add one as a
+    modifier (--action:file,table). file output also infers csv/markdown/xml
     from the extension.
+  - -x/--xml is shorthand for --action:xml. It maps a sheet's table to XML: the
+    header row names the fields (Last Name => <Last_Name>) and each later row is
+    a record. With no -c/-r/-t op, --xml extracts the whole sheet (its used
+    range), skipping blank rows. Bare --xml prints to the terminal; --xml --file
+    out.xml (or --action:xml out.xml) writes a file.
+  - Container tags: if the workbook has an embedded Excel XML map (Developer >
+    XML), --xml uses its root and repeating-row element names and adds
+    xmlns:xsi (e.g. <cardholders ...><CardHolder>...). Otherwise the root is the
+    camel-cased sheet name and rows are <row>. Override either with
+    --xml:root,row (e.g. --xml:cardholders,CardHolder; --xml:,Record sets only
+    the row).
   - pdf and md targets share one two-pass aligned table (columns padded to line
     up). A blank row splits a sheet into stacked tables; empty columns drop out.
   - --file out.pdf and --file out.md imply --action:pdf / --action:md; any other
@@ -61,6 +73,8 @@ const EXAMPLES = `Examples:
   extract-excel book.xlsx --cell Z22 --action:file,stdout out.txt
   extract-excel book.xlsx --range sheet --action:table
   extract-excel book.xlsx -r sheet:"Sales Dashboard" --action:markdown
+  extract-excel book.xlsx --xml
+  extract-excel book.xlsx -s XML --xml:cardholders,CardHolder --file out.xml
   extract-excel book.xlsx --range A1:F20 --file report.csv
   extract-excel book.xlsx --range sheet --action:pdf report.pdf
   extract-excel book.xlsx --range sheet --action:pdf --assume-merge report.pdf

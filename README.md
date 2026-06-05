@@ -50,6 +50,7 @@ default, so `extract-excel book.xlsx ...` just works.
 | `-s, --sheet`       | select:single  | Select a sheet (must follow its workbook).                |
 | `-t, --title`       | extract:multi  | Extract a column by its header title.                     |
 | `-v, --version`     | app:doc        | Print the installed version.                              |
+| `-x, --xml`         | output:single  | Output the sheet's mapped table as XML.                   |
 | `--assume-merge`    | switch:bool    | Collapse spanned merge cells in `pdf`/`md` output.        |
 | `--test`            | app:test       | Run `global`, `unit`, or `custom` tests.                  |
 
@@ -96,10 +97,15 @@ extract-excel book.xlsx --cell Z22 --action:file,stdout out.txt
 extract-excel book.xlsx --title "Company Name" -t Phone --action:pdf summary.pdf
 extract-excel book.xlsx --cell Z22 --action:file,var var=_name file=out.txt
 
-# Output formats: text (default), table, csv, markdown
+# Output formats: text (default), table, csv, markdown, xml
 extract-excel book.xlsx --range sheet --action:table          # aligned grid
 extract-excel book.xlsx --range A1:F20 --file report.csv      # csv inferred
 extract-excel book.xlsx -r sheet:"Pivot" --action:markdown    # markdown table
+
+# XML: the sheet mapped to records (header row names the fields)
+extract-excel book.xlsx --xml                                 # whole sheet -> terminal
+extract-excel book.xlsx -s "Pivot" --xml --file pivot.xml     # to a file
+extract-excel book.xlsx -s XML --xml:cardholders,CardHolder   # override root/row tags
 
 # Aligned PDF / markdown tables (extension implies the target)
 extract-excel book.xlsx --range sheet --file report.pdf       # pdf target
@@ -128,16 +134,57 @@ path/name are `file`, `pdf`, `md`, and `var`.
 | `--action:file out.txt`                         | Single target → next token is its value. |
 | `--action:file,stdout out.txt`                  | File **and** terminal.                   |
 | `--action:table`                                | Terminal, formatted as an aligned table. |
+| `--action:xml`                                  | Terminal, formatted as XML.              |
+| `--action:xml out.xml`                          | File, formatted as XML.                  |
 | `--action:file,csv out.csv`                     | File, formatted as CSV.                  |
 | `--action:pdf report.pdf`                       | Aligned table rendered into a PDF.       |
 | `--action:md report.md`                         | Aligned table written to a `.md` file.   |
 | `--action:file,var var=_n file=out.txt`         | Multiple value targets → `name=value`.   |
 | `--action:pdf,file,var var=_n pdf=s.pdf file=o.txt` | Three targets, each named.           |
 
-**Formats** — `text` (default), `table`, `csv`, `markdown`. Add one as a
+**Formats** — `text` (default), `table`, `csv`, `markdown`, `xml`. Add one as a
 modifier among the targets (e.g. `--action:file,table`). When writing a plain
 file, the format is also inferred from the extension (`.csv` → csv, `.md` →
-markdown).
+markdown, `.xml` → xml). A format-only action followed by a path
+(`--action:xml out.xml`) writes that file; with no path it prints to the
+terminal.
+
+#### XML (`-x, --xml`)
+
+`-x/--xml` is shorthand for the `--action:xml` format modifier. It maps a
+sheet's table to records: the **header row names the fields** (`Last Name` →
+`<Last_Name>`, `FT/PT` → `<FT_PT>`) and every later row becomes a record. Blank
+rows are skipped. With no `-c/-r/-t` op, `--xml` extracts the whole sheet (its
+used range). On its own it prints to the terminal; pair it with `--file out.xml`
+to write a file.
+
+**Container tags** — if the workbook carries an **embedded Excel XML map**
+(*Developer → XML*, the same mechanism behind `xmlns:xsi`), `--xml` detects and
+reuses its root and repeating-row element names and stamps the `xmlns:xsi`
+namespace, so the output matches what Excel itself exports. Otherwise the root is
+the camel-cased sheet name (`On Boarding` → `<onBoarding>`) and each record is a
+`<row>`. Override either name with `--xml:root,row`
+(`--xml:cardholders,CardHolder`, or `--xml:,Record` for just the row).
+
+```xml
+<!-- workbook with an embedded XML map -->
+<cardholders xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CardHolder>
+    <Name>Flint River Fuel Center</Name>
+    <Number>-</Number>
+    <Status>Active</Status>
+  </CardHolder>
+</cardholders>
+
+<!-- workbook with no map: sheet name + <row> -->
+<data>
+  <row>
+    <ID>1</ID>
+    <Last_Name>Anderson</Last_Name>
+    <First_Name>James</First_Name>
+  </row>
+</data>
+```
 
 #### Aligned tables (`pdf` and `md`)
 
