@@ -126,7 +126,7 @@ async function buildMappedWorkbook(): Promise<string> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('XML');
   ws.addRow(['Name', 'Number']);
-  ws.addRow(['Flint River Fuel Center', '-']);
+  ws.addRow(['Acme Center', '-']);
   const zip = await JSZip.loadAsync(await wb.xlsx.writeBuffer());
   zip.file('xl/xmlMaps.xml', SAMPLE_XML_MAPS);
   const out = await zip.generateAsync({ type: 'nodebuffer' });
@@ -465,7 +465,7 @@ function unitTests(): UnitTest[] {
           'detected root + namespace in output',
         );
         assert(output.includes('<CardHolder>'), 'detected row tag in output');
-        assert(output.includes('<Name>Flint River Fuel Center</Name>'), 'record data');
+        assert(output.includes('<Name>Acme Center</Name>'), 'record data');
         assert(output.includes('</cardholders>'), 'root closed');
       },
     },
@@ -616,7 +616,7 @@ function unitTests(): UnitTest[] {
           },
           rows: [
             ['Name', 'Number'],
-            ['Flint River Fuel Center', '-'],
+            ['Acme Center', '-'],
             ['', ''], // empty row -> skipped, not an empty <CardHolder>
             ['Acme', '42'],
           ],
@@ -628,7 +628,7 @@ function unitTests(): UnitTest[] {
           'mapped root with namespace',
         );
         assertEqual(lines[2], '  <CardHolder>', 'mapped row tag');
-        assertEqual(lines[3], '    <Name>Flint River Fuel Center</Name>', 'field value');
+        assertEqual(lines[3], '    <Name>Acme Center</Name>', 'field value');
         const records = lines.filter((l) => l.trim() === '<CardHolder>').length;
         assertEqual(records, 2, 'two records (blank row skipped)');
         assertEqual(lines[lines.length - 1], '</cardholders>', 'mapped root close');

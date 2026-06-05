@@ -168,13 +168,13 @@ the camel-cased sheet name (`On Boarding` → `<onBoarding>`) and each record is
 
 ```xml
 <!-- workbook with an embedded XML map -->
-<cardholders xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <CardHolder>
-    <Name>Flint River Fuel Center</Name>
+<customers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Customer>
+    <Name>Acme Center</Name>
     <Number>-</Number>
     <Status>Active</Status>
-  </CardHolder>
-</cardholders>
+  </Customer>
+</customers>
 
 <!-- workbook with no map: sheet name + <row> -->
 <data>
