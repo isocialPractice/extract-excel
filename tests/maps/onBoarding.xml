@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<onBoarding>
+  <row>
+    <ID></ID>
+    <First_Name></First_Name>
+    <Last_Name></Last_Name>
+    <Department></Department>
+    <Start_Date></Start_Date>
+    <Salary></Salary>
+  </row>
+  <row>
+    <ID></ID>
+    <First_Name></First_Name>
+    <Last_Name></Last_Name>
+    <Department></Department>
+    <Start_Date></Start_Date>
+    <Salary></Salary>
+  </row>
+</onBoarding>
