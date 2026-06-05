@@ -201,13 +201,13 @@ a `<row>`. Override either name with `--xml:root,row`
 
 ```xml
 <!-- workbook with an embedded XML map -->
-<cardholders xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <CardHolder>
-    <Name>Flint River Fuel Center</Name>
-    <Number>-</Number>
+<customers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Customer>
+    <Name>Acme Center</Name>
+    <Number>123</Number>
     <Status>Active</Status>
-  </CardHolder>
-</cardholders>
+  </Customer>
+</customers>
 
 <!-- workbook with no map: sheet name + <row> -->
 <data>
