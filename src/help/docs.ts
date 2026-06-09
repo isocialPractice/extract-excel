@@ -25,7 +25,9 @@ const OPTIONS = `Options:
   -h, --help         app:doc         Show global or specific help.
   -o, --orientation  switch:string   PDF page orientation (landscape | portrait).
   -r, --range        extract:multi   Extract a range, e.g. -r A2:F45.
-  -s, --sheet        select:single   Select a sheet (must follow its workbook).
+  -s, --sheet[:q]    select:single   Select a sheet (must follow its workbook).
+                                     :length — sheet count; :list — sheet names;
+                                     :info  — count + names combined.
   -t, --title        extract:multi   Extract a column by header title.
   -v, --version      app:doc         Print the installed version.
   -x, --xml          output:single   Output the sheet's mapped table as XML.
@@ -36,6 +38,12 @@ const OPTIONS = `Options:
 
 Notes:
   - -s/--sheet is only honored immediately after its workbook.
+
+  - --sheet:length returns the number of sheets in a workbook; --sheet:list
+    returns each sheet name on its own line; --sheet:info returns both as a
+    "length: N" header followed by a "- Name" bullet list. All three can be
+    routed with -f/--file. The md target uses markdown list format for :list
+    and :info.
 
   - A workbook with >1 sheet and no --sheet raises a custom error.
 
@@ -95,6 +103,10 @@ Notes:
 
 const EXAMPLES = `Examples:
   extract-excel book.xlsx --cell A2
+  extract-excel book.xlsx --sheet:length
+  extract-excel book.xlsx --sheet:list
+  extract-excel book.xlsx --sheet:info
+  extract-excel book.xlsx --sheet:list --file sheets.txt
   extract-excel book.xlsx --range A2:F45 -r B4:U8
   extract-excel book.xlsx --title "Company Name" -t Phone
   extract-excel book.xlsx -s "Monthly Budget" --range B5:N9

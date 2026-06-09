@@ -19,6 +19,7 @@ import {
   HelpCommand,
   OutputFormat,
   PageOrientation,
+  SheetQuery,
   TestCommand,
   defaultAction,
 } from './types';
@@ -341,6 +342,14 @@ function parseExtract(tokens: string[]): ExtractCommand {
         break;
       }
       case 'sheet': {
+        // Qualifier form: --sheet:length, --sheet:list, --sheet:info — workbook
+        // introspection queries that don't select a sheet for extraction.
+        if (flag.suffix === 'length' || flag.suffix === 'list' || flag.suffix === 'info') {
+          requireBook(`--sheet:${flag.suffix}`).sheetQuery = flag.suffix as SheetQuery;
+          sheetAllowed = false;
+          break;
+        }
+        // Normal sheet name selection (must immediately follow the book token).
         const name = next();
         // Derive the open book from `books` to sidestep closure-assignment CFA.
         const book = books.length > 0 ? books[books.length - 1] : null;

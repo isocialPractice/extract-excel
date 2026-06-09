@@ -17,6 +17,9 @@ export type ActionTarget = 'stdout' | 'file' | 'pdf' | 'md' | 'var';
 /** How extracted data is rendered to a destination. */
 export type OutputFormat = 'text' | 'table' | 'csv' | 'markdown' | 'xml';
 
+/** A sheet-level inspection query attached to a book (`--sheet:length`, `:list`, `:info`). */
+export type SheetQuery = 'length' | 'list' | 'info';
+
 /** Page orientation for the `pdf` target (`-o/--orientation`). */
 export type PageOrientation = 'landscape' | 'portrait';
 
@@ -107,6 +110,11 @@ export interface BookJob {
   source: BookSource;
   /** Selected sheet name (must have immediately followed the book token). */
   sheet?: string;
+  /**
+   * Sheet-level inspection query (`--sheet:length`, `--sheet:list`, `--sheet:info`).
+   * When set, the book skips normal extraction and outputs workbook sheet metadata.
+   */
+  sheetQuery?: SheetQuery;
   ops: ExtractOp[];
   /** Output routing; merged from `--file` and `--action` for this book. */
   action: ActionSpec;

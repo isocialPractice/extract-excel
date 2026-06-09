@@ -55,6 +55,39 @@ export interface OutputContext {
   sheet?: string;
 }
 
+/**
+ * Dispatch a pre-rendered text string to all configured targets. Used by sheet
+ * queries (`--sheet:length`, `:list`, `:info`) which produce plain text, not
+ * tabular extraction results. The `pdf` target is silently skipped because a
+ * LibreOffice export is not applicable for metadata-only output.
+ */
+export async function dispatchText(
+  text: string,
+  action: ActionSpec,
+  ctx: OutputContext,
+): Promise<void> {
+  const targets = action.targets.length > 0 ? action.targets : ['stdout'];
+  for (const target of targets) {
+    switch (target) {
+      case 'stdout':
+        ctx.write(text + '\n');
+        break;
+      case 'file':
+        writeTextFile(requirePath(action.file, 'file'), text);
+        break;
+      case 'md':
+        writeTextFile(requirePath(action.md, 'md'), text);
+        break;
+      case 'var':
+        ctx.write(renderVarExport(requireName(action.var), text, ctx.config) + '\n');
+        break;
+      case 'pdf':
+        // Sheet query output is plain text; the pdf target is not applicable.
+        break;
+    }
+  }
+}
+
 /** Dispatch one book's results to all of its targets. */
 export async function dispatch(
   results: ExtractionResult[],

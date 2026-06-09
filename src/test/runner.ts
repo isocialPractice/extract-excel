@@ -929,6 +929,125 @@ function unitTests(): UnitTest[] {
       },
     },
 
+    // --- select: sheet queries (--sheet:length / :list / :info) ---
+    {
+      name: 'parser: --sheet:length sets sheetQuery without consuming a token',
+      category: 'parser',
+      opt: 'sheet',
+      taskType: 'single',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--sheet:length']) as ExtractCommand;
+        assertEqual(cmd.books[0].sheetQuery, 'length', 'sheetQuery');
+        assertEqual(cmd.books[0].ops.length, 0, 'no extraction op');
+      },
+    },
+    {
+      name: 'parser: --sheet:list sets sheetQuery',
+      category: 'parser',
+      opt: 'sheet',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--sheet:list']) as ExtractCommand;
+        assertEqual(cmd.books[0].sheetQuery, 'list', 'sheetQuery');
+      },
+    },
+    {
+      name: 'parser: --sheet:info sets sheetQuery',
+      category: 'parser',
+      opt: 'sheet',
+      run: () => {
+        const cmd = parse(['f.xlsx', '--sheet:info']) as ExtractCommand;
+        assertEqual(cmd.books[0].sheetQuery, 'info', 'sheetQuery');
+      },
+    },
+    {
+      name: 'parser: -s:length / -s:list / -s:info short flags set sheetQuery',
+      category: 'parser',
+      opt: 'sheet',
+      run: () => {
+        assertEqual((parse(['f.xlsx', '-s:length']) as ExtractCommand).books[0].sheetQuery, 'length', '-s:length');
+        assertEqual((parse(['f.xlsx', '-s:list']) as ExtractCommand).books[0].sheetQuery, 'list', '-s:list');
+        assertEqual((parse(['f.xlsx', '-s:info']) as ExtractCommand).books[0].sheetQuery, 'info', '-s:info');
+      },
+    },
+    {
+      name: 'select: --sheet:length returns the sheet count',
+      category: 'select',
+      opt: 'sheet',
+      taskType: 'single',
+      run: async () => {
+        const cmd = parse(['f.xlsx', '--sheet:length']) as ExtractCommand;
+        let output = '';
+        const multiWb = new Workbook('f.xlsx', [
+          new Sheet('Alpha', [['a']]),
+          new Sheet('Beta', [['b']]),
+          new Sheet('Gamma', [['c']]),
+        ]);
+        await runExtract(cmd, {
+          write: (t) => (output += t),
+          loadWorkbook: async () => multiWb,
+        });
+        assertEqual(output.trim(), '3', 'sheet count');
+      },
+    },
+    {
+      name: 'select: --sheet:list returns one name per line',
+      category: 'select',
+      opt: 'sheet',
+      run: async () => {
+        const cmd = parse(['f.xlsx', '--sheet:list']) as ExtractCommand;
+        let output = '';
+        const multiWb = new Workbook('f.xlsx', [
+          new Sheet('Alpha', [['a']]),
+          new Sheet('Beta', [['b']]),
+        ]);
+        await runExtract(cmd, {
+          write: (t) => (output += t),
+          loadWorkbook: async () => multiWb,
+        });
+        assertEqual(output.trim(), 'Alpha\nBeta', 'sheet names');
+      },
+    },
+    {
+      name: 'select: --sheet:info returns count header and bullet list',
+      category: 'select',
+      opt: 'sheet',
+      run: async () => {
+        const cmd = parse(['f.xlsx', '--sheet:info']) as ExtractCommand;
+        let output = '';
+        const multiWb = new Workbook('f.xlsx', [
+          new Sheet('Alpha', [['a']]),
+          new Sheet('Beta', [['b']]),
+        ]);
+        await runExtract(cmd, {
+          write: (t) => (output += t),
+          loadWorkbook: async () => multiWb,
+        });
+        assertEqual(output.trim(), 'length: 2\n- Alpha\n- Beta', 'info output');
+      },
+    },
+    {
+      name: 'select: --sheet:list with md target uses markdown list bullets',
+      category: 'select',
+      opt: 'sheet',
+      run: async () => {
+        // Use a temp file path to verify the md target writes list-format text.
+        const tmp = path.join(os.tmpdir(), `ee-sheetlist-${process.pid}-${Date.now()}.md`);
+        const cmd = parse(['f.xlsx', '--sheet:list', '--file', tmp]) as ExtractCommand;
+        const multiWb = new Workbook('f.xlsx', [
+          new Sheet('Alpha', [['a']]),
+          new Sheet('Beta', [['b']]),
+        ]);
+        try {
+          await runExtract(cmd, { loadWorkbook: async () => multiWb });
+          const written = fs.readFileSync(tmp, 'utf8').trim();
+          // --file with a .md extension uses the md target => list format.
+          assertEqual(written, '- Alpha\n- Beta', 'md list format');
+        } finally {
+          fs.rmSync(tmp, { force: true });
+        }
+      },
+    },
+
     // --- version ---
     {
       name: 'parser: --version returns the version command',
