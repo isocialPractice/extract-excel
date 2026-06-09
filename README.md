@@ -47,7 +47,7 @@ default, so `extract-excel book.xlsx ...` just works.
 | `-h, --help`        | app:doc        | Show global (`--help`) or specific help.                  |
 | `-o, --orientation` | switch:string  | PDF page orientation (`landscape` \| `portrait`).         |
 | `-r, --range`       | extract:multi  | Extract a range, e.g. `-r A2:F45`.                        |
-| `-s, --sheet`       | select:single  | Select a sheet (must follow its workbook).                |
+| `-s, --sheet[:q]`   | select:single  | Select a sheet (must follow its workbook). Qualifier form: `:length` — sheet count; `:list` — sheet names; `:info` — count + names. |
 | `-t, --title`       | extract:multi  | Extract a column by its header title.                     |
 | `-v, --version`     | app:doc        | Print the installed version.                              |
 | `-x, --xml`         | output:single  | Output the sheet's mapped table as XML.                   |
@@ -59,6 +59,9 @@ default, so `extract-excel book.xlsx ...` just works.
 - **`-s/--sheet` is sticky.** It is only honored when it *immediately* follows
   its workbook. `-b book.xlsx --cell A1 --sheet Data` silently ignores the
   sheet, because `--cell` came first.
+- **Sheet queries skip extraction.** `--sheet:length`, `--sheet:list`, and
+  `--sheet:info` are qualifier forms that inspect the workbook instead of
+  selecting a sheet for extraction (see [Sheet queries](#sheet-queries) below).
 - **Ambiguous sheets error out.** A workbook with more than one sheet and no
   `--sheet` raises a clear error listing the available sheets.
 - **References are normalized.** `yc30`, `r249`, and `y10:AA123` are all valid;
@@ -90,6 +93,13 @@ extract-excel book.xlsx -r sheet:"Sales Dashboard"    # a named sheet
 
 # Pick a sheet (must immediately follow the workbook)
 extract-excel book.xlsx -s "Monthly Budget" --range B5:N9
+
+# Inspect a workbook's sheets (no extraction)
+extract-excel book.xlsx --sheet:length             # number of sheets
+extract-excel book.xlsx --sheet:list               # one name per line
+extract-excel book.xlsx --sheet:info               # count + names combined
+extract-excel book.xlsx --sheet:list --file sheets.txt   # write to a file
+extract-excel book.xlsx -s:info                    # short flag form
 
 # Output routing
 extract-excel book.xlsx --cell C5 --file out.txt
@@ -226,6 +236,37 @@ It accepts an explicit value (`--assume-merge=true` / `--assume-merge=false`) an
 defaults to off. Used once anywhere within a book it applies to every extraction
 in that book; used more than once, place it before each extraction to vary the
 setting.
+
+#### Sheet queries (`--sheet:length`, `:list`, `:info`)
+
+The qualifier forms of `-s/--sheet` inspect a workbook's sheet structure without
+running any extraction. They can be routed to any output target with `-f/--file`
+or `--action`.
+
+| Qualifier        | Output                                                        |
+| :--------------- | :------------------------------------------------------------ |
+| `--sheet:length` | Bare sheet count (e.g. `3`).                                  |
+| `--sheet:list`   | One sheet name per line; markdown bullet list for `pdf`/`md`. |
+| `--sheet:info`   | `length: N` header followed by `- Name` bullets.             |
+
+```bash
+extract-excel book.xlsx --sheet:length
+# 3
+
+extract-excel book.xlsx --sheet:list
+# Sheet1
+# Sheet2
+# Sheet3
+
+extract-excel book.xlsx --sheet:info
+# length: 3
+# - Sheet1
+# - Sheet2
+# - Sheet3
+
+# Write to a file (the .md extension triggers bullet-list format)
+extract-excel book.xlsx --sheet:list --file sheets.md
+```
 
 #### `-o, --orientation`
 

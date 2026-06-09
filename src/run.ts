@@ -7,7 +7,7 @@
  * what makes the `--test` runner able to replay commands and capture results.
  */
 import * as path from 'path';
-import { ExtractCommand, BookSource, ExtractOp, ActionSpec, XmlMapping } from './parser/types';
+import { ExtractCommand, BookSource, ExtractOp, ActionSpec, XmlMapping, SheetQuery } from './parser/types';
 import {
   Workbook,
   Sheet,
@@ -22,7 +22,7 @@ import {
   extractTitle,
   ExtractionResult,
 } from './engine/extract';
-import { dispatch, OutputContext } from './output/actions';
+import { dispatch, dispatchText, OutputContext } from './output/actions';
 import { ExtractConfig, loadConfig } from './config';
 
 export interface RunOptions {
@@ -51,6 +51,15 @@ export async function runExtract(
 
   for (const book of command.books) {
     const workbook = await loader(book.source, cwd);
+
+    // Handle sheet queries (--sheet:length / :list / :info) before extraction.
+    if (book.sheetQuery) {
+      const targets = book.action.targets;
+      const listFormat = targets.includes('md') || targets.includes('pdf');
+      const text = renderSheetQuery(workbook, book.sheetQuery, listFormat);
+      await dispatchText(text, book.action, ctx);
+      continue;
+    }
 
     // For XML output, resolve the container tags: a `--xml:root,row` override
     // layered over the workbook's embedded Excel XML map (when it has one). The
@@ -150,4 +159,29 @@ async function defaultLoader(source: BookSource, cwd: string): Promise<Workbook>
     ? source.path
     : path.resolve(cwd, source.path);
   return loadWorkbook(resolved);
+}
+
+/**
+ * Render workbook sheet metadata as plain text for a `--sheet` query.
+ *
+ * - `length` : the sheet count as a bare number.
+ * - `list`   : one sheet name per line; with `listFormat` each line is prefixed
+ *              with `- ` so it reads as a markdown bullet list.
+ * - `info`   : `length: N` header followed by the bullet list of names.
+ */
+function renderSheetQuery(workbook: Workbook, query: SheetQuery, listFormat: boolean): string {
+  const names = workbook.sheetNames;
+  const count = workbook.sheetCount;
+  switch (query) {
+    case 'length':
+      return String(count);
+    case 'list':
+      return listFormat
+        ? names.map((n) => `- ${n}`).join('\n')
+        : names.join('\n');
+    case 'info': {
+      const lines = [`length: ${count}`, ...names.map((n) => `- ${n}`)];
+      return lines.join('\n');
+    }
+  }
 }

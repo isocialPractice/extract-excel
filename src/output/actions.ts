@@ -28,6 +28,39 @@ export interface OutputContext {
   write: (text: string) => void;
 }
 
+/**
+ * Dispatch a pre-rendered text string to all configured targets. Used by sheet
+ * queries (`--sheet:length`, `:list`, `:info`) which produce plain text, not
+ * tabular extraction results. The `pdf` target writes the text into a PDF;
+ * behaviour is otherwise identical to `dispatch` for the text format.
+ */
+export async function dispatchText(
+  text: string,
+  action: ActionSpec,
+  ctx: OutputContext,
+): Promise<void> {
+  const targets = action.targets.length > 0 ? action.targets : ['stdout'];
+  for (const target of targets) {
+    switch (target) {
+      case 'stdout':
+        ctx.write(text + '\n');
+        break;
+      case 'file':
+        writeTextFile(requirePath(action.file, 'file'), text);
+        break;
+      case 'md':
+        writeTextFile(requirePath(action.md, 'md'), text);
+        break;
+      case 'pdf':
+        await writePdf(requirePath(action.pdf, 'pdf'), text, action.orientation);
+        break;
+      case 'var':
+        ctx.write(renderVarExport(requireName(action.var), text, ctx.config) + '\n');
+        break;
+    }
+  }
+}
+
 /** Dispatch one book's results to all of its targets. */
 export async function dispatch(
   results: ExtractionResult[],
