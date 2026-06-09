@@ -86,6 +86,7 @@ default, so `extract-excel book.xlsx ...` just works.
 | `-x, --xml`         | output:single   | Output the sheet's mapped table as XML.                |
 | `--assume-merge`    | switch:bool     | Collapse spanned merge cells in `md` output.           |
 | `--fit`             | switch:bool     | Fit the exported sheet onto a single PDF page.         |
+| `--pdf`             | output:single   | Export the workbook to a PDF (`--action:pdf` alias).   |
 | `--test`            | app:test        | Run `global`, `unit`, or `custom` tests.               |
 
 ### Rules worth knowing
@@ -147,6 +148,8 @@ extract-excel book.xlsx --range sheet --action:md summary.md --assume-merge
 
 # PDF: a real LibreOffice export of the selected sheet (formatting preserved)
 extract-excel book.xlsx -s "Sales Dashboard" --action:pdf report.pdf
+extract-excel book.xlsx -s "Sales Dashboard" --pdf report.pdf       # explicit alias
+extract-excel book.xlsx --pdf workbook.pdf                          # whole workbook, auto-oriented
 extract-excel book.xlsx -s "Sales Dashboard" -o landscape --fit --file report.pdf
 
 # Print the installed version
@@ -225,22 +228,35 @@ repeated text that spanned merges leave behind (numeric duplicates are kept). A
 `--file out.md` path implies `--action:md`; any other extension (including
 `out.md.txt`) stays a plain text file.
 
-**PDF output** exports the source workbook via LibreOffice — the full sheet,
-with all native Excel formatting intact (fonts, colours, merged cells, charts).
+**PDF output** exports the source workbook via LibreOffice — the rendered
+sheets, with native Excel formatting intact (fonts, colours, merged cells).
 Format modifiers and `--assume-merge` are ignored for the `pdf` target. Three
 options shape the export and apply **only** to PDF (ignored otherwise):
 
-- **`-s/--sheet`** selects which sheet is rendered. Without it the workbook's
-  first sheet is exported; a `--file out.pdf` path implies `--action:pdf`.
-- **`-o/--orientation`** sets the page layout to `landscape` or `portrait`.
-- **`--fit`** scales the selected sheet onto a single PDF page.
+- **`-s/--sheet`** selects a single sheet to render, using `-o/--orientation`
+  and `--fit` for its page layout. **With no sheet selected the whole workbook
+  is exported to one PDF**: every sheet is fit to a page and **auto-oriented**
+  from its own proportions — `portrait` when it is taller than it is wide,
+  `landscape` when wider (a tie is portrait). An explicit `-o/--orientation`
+  then applies to every sheet, and `--fit=false` turns the per-sheet fit off.
+  A `--file out.pdf` path implies `--action:pdf`, and `--pdf out.pdf` is an
+  explicit alias for the same export.
+- **`-o/--orientation`** sets the page layout to `landscape` or `portrait`,
+  overriding the per-sheet auto choice.
+- **`--fit`** scales a sheet onto a single PDF page; the whole-workbook export
+  fits every sheet by default (`--fit=false` to opt out).
 
-Because the export isolates one sheet, **formulas are frozen to their
-last-computed values** before conversion. This keeps cross-sheet references
-correct (they would otherwise become `#REF!`/`#NAME?` once the other sheets are
-dropped). A formula that computes to an empty string or an error (`#NAME?`,
+Before conversion, **formulas are frozen to their last-computed values**. This
+keeps cross-sheet references correct (when a single sheet is isolated they would
+otherwise become `#REF!`/`#NAME?` once the other sheets are dropped). A formula
+that computes to an empty string or an error (`#NAME?`,
 `#REF!`, `#DIV/0!`, …) renders **blank** rather than printing the error text,
-while real values — including `0` — are preserved.
+while real values — including `0` — are preserved. Font flags that a workbook
+records as explicitly **off** (bold, italic, and strikethrough written as
+`<b val="false"/>`, `<i val="0"/>`, `<strike val="false"/>`, …, the form
+LibreOffice and some other producers emit) are dropped before the export, so a
+cell only appears bold, italic, or struck through when Excel actually styled it
+that way.
 
 `var` emits an OS-appropriate, sourceable assignment (Windows `set "..."`,
 PowerShell `$env:..`, POSIX `export ..`) because a child process cannot set a

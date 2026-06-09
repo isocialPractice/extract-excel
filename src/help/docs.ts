@@ -31,6 +31,7 @@ const OPTIONS = `Options:
   -x, --xml          output:single   Output the sheet's mapped table as XML.
       --assume-merge switch:bool     Collapse spanned merge cells in md output.
       --fit          switch:bool     Fit the exported sheet to one PDF page.
+      --pdf          output:single   Export the workbook to a PDF (LibreOffice).
       --test         app:test        Run global, unit, or custom tests.
 
 Notes:
@@ -65,10 +66,15 @@ Notes:
     (preserving Excel formatting), not a reconstructed table. It requires
     LibreOffice on the PATH and does not support raw CSV input.
 
-  - -s/--sheet selects which sheet the pdf export renders; -o/--orientation and
-    --fit set its page layout. All three are ignored without PDF output.
+  - With -s/--sheet the pdf export renders just that sheet, using -o/--orientation
+    and --fit for its page layout. With no sheet selected the whole workbook is
+    exported to one PDF: every sheet is fit to a page and auto-oriented from its
+    own proportions (portrait when taller than wide, landscape when wider, ties
+    portrait). An explicit -o/--orientation then applies to all sheets, and
+    --fit=false turns the per-sheet fit off. All are ignored without PDF output.
 
-  - --fit (or =true/=false) scales the exported sheet onto a single PDF page.
+  - --fit (or =true/=false) scales the exported sheet onto a single PDF page; the
+    whole-workbook export fits every sheet by default (opt out with --fit=false).
 
   - Formulas on the exported sheet are frozen to their last-computed values, so
     references to other sheets stay correct; a formula that computes to an empty
@@ -78,6 +84,9 @@ Notes:
   - The md target writes a two-pass aligned table to a .md file; --assume-merge
     (or =true/=false) collapses repeated text from spanned merges there (numeric
     duplicates are kept). It does not affect the pdf export.
+
+  - --pdf out.pdf is an explicit alias for the pdf target — the same export as
+    --file out.pdf or --action:pdf out.pdf, with -s/-o/--fit applying as usual.
 
   - --file out.pdf and --file out.md imply --action:pdf / --action:md; any other
     extension (including out.md.txt) stays a plain text file.
@@ -97,6 +106,8 @@ const EXAMPLES = `Examples:
   extract-excel book.xlsx -s "Sales Dashboard" --xml --file dashboard.xml
   extract-excel book.xlsx --range A1:F20 --file report.csv
   extract-excel book.xlsx -s "Sales Dashboard" --action:pdf report.pdf
+  extract-excel book.xlsx -s "Sales Dashboard" --pdf report.pdf
+  extract-excel book.xlsx --pdf workbook.pdf
   extract-excel book.xlsx -s "Sales Dashboard" -o landscape --fit --file report.pdf
   extract-excel book.xlsx --range sheet --file summary.md --assume-merge
   extract-excel a.xlsx -c A1 -b b.xlsx --range B8:AB25 --action:stdout,file b.txt

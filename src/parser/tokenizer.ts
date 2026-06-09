@@ -37,6 +37,7 @@ const KNOWN_FLAGS: Record<string, string> = {
   '--help': 'help',
   '-o': 'orientation',
   '--orientation': 'orientation',
+  '--pdf': 'pdf',
   '-r': 'range',
   '--range': 'range',
   '-s': 'sheet',
@@ -387,6 +388,16 @@ function parseExtract(tokens: string[]): ExtractCommand {
         // A `.pdf`/`.md` path implies the aligned PDF/markdown target.
         const target = impliedFileTarget(value);
         applyAction(book, { targets: [target], [target]: value });
+        sheetAllowed = false;
+        break;
+      }
+      case 'pdf': {
+        // `--pdf <path>` is an explicit alias for the pdf output target: the
+        // same routing as `-f/--file out.pdf` or `--action:pdf out.pdf`, but as
+        // its own option so the intent reads directly. The next token is the
+        // output path; orientation/fit/sheet still apply as for any PDF export.
+        const book = requireBook('--pdf');
+        applyAction(book, { targets: ['pdf'], pdf: next() });
         sheetAllowed = false;
         break;
       }

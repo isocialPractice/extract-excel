@@ -29,6 +29,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { ActionSpec, PageOrientation } from '../parser/types';
 import { ExtractConfig } from '../config';
 import { ExtractError } from '../errors';
@@ -122,36 +123,44 @@ function writeTextFile(filePath: string, text: string): void {
 
 /** PDF export options resolved from the action (and book sheet selection). */
 interface PdfOptions {
-  /** Sheet to isolate before export; defaults to the workbook's first sheet. */
+  /**
+   * Sheet to isolate and export on its own. When omitted the whole workbook is
+   * exported to a single PDF with per-sheet fit + auto-orientation instead.
+   */
   sheet?: string;
-  /** Page orientation to apply to the exported sheet. */
+  /**
+   * Explicit page orientation. Applied to the isolated sheet, or to every sheet
+   * of a whole-workbook export (overriding the per-sheet auto choice).
+   */
   orientation?: PageOrientation;
-  /** When true, scale the exported sheet to a single PDF page. */
+  /**
+   * Scale each exported sheet to a single PDF page. Defaults on for the
+   * whole-workbook export; `--fit=false` opts out.
+   */
   fit?: boolean;
 }
 
 /**
- * Export a workbook to PDF via LibreOffice.
+ * Export a workbook to PDF via LibreOffice. Both shapes embed page setup into a
+ * temporary copy that LibreOffice then renders:
  *
- * With no sheet selection or page-setup options the source workbook is
- * converted directly, preserving maximum rendering fidelity. Otherwise the
- * workbook is rewritten to a temporary copy that contains only the selected
- * sheet with the requested orientation / fit, and that copy is exported — this
- * is what makes `-s/--sheet`, `-o/--orientation`, and `--fit` take effect on a
- * real LibreOffice render.
+ *   - With a selected sheet (`-s/--sheet`) only that sheet is exported, carrying
+ *     the explicit `-o/--orientation` and `--fit` that were requested.
+ *   - With no sheet selected the whole workbook is exported to a single PDF and
+ *     every sheet is fitted to one page and auto-oriented from its own used
+ *     extent (portrait when taller than wide, landscape when wider, portrait on
+ *     a tie). An explicit `-o/--orientation` overrides the auto choice for all
+ *     sheets; `--fit=false` turns the per-sheet fit off.
  */
 async function exportPdf(
   sourcePath: string,
   outputPath: string,
   opts: PdfOptions,
 ): Promise<void> {
-  const needsPreprocess = !!opts.sheet || !!opts.orientation || !!opts.fit;
-  if (!needsPreprocess) {
-    await convertWithLibreOffice(sourcePath, outputPath);
-    return;
-  }
-
-  const prepared = await buildPreparedWorkbook(sourcePath, opts);
+  const prepared =
+    opts.sheet !== undefined
+      ? await buildPreparedWorkbook(sourcePath, opts)
+      : await buildWholeWorkbookExport(sourcePath, opts);
   try {
     await convertWithLibreOffice(prepared, outputPath);
   } finally {
@@ -169,7 +178,16 @@ async function buildPreparedWorkbook(
   opts: PdfOptions,
 ): Promise<string> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(sourcePath);
+  // Load from a styles-sanitized copy so font flags that are explicitly turned
+  // *off* (`<b val="false"/>`, `<i val="0"/>`, `<strike val="false"/>`, …) are
+  // dropped before exceljs misreads them as on (see sanitizeFontFlags). Without
+  // this the exported PDF would show bold/italic/strikethrough that the cells
+  // never had.
+  //
+  // exceljs types load()'s parameter as ArrayBuffer but accepts a Node Buffer at
+  // runtime; cast through unknown to bridge the overly narrow declaration.
+  const bytes = (await sanitizedWorkbookBuffer(sourcePath)) as unknown as ArrayBuffer;
+  await wb.xlsx.load(bytes);
 
   const target = resolveWorksheet(wb, sourcePath, opts.sheet);
 
@@ -191,12 +209,92 @@ async function buildPreparedWorkbook(
     ...(opts.fit ? { fitToPage: true, fitToWidth: 1, fitToHeight: 1 } : {}),
   };
 
-  const tmp = path.join(
-    os.tmpdir(),
-    `extract-excel-${process.pid}-${Date.now()}.xlsx`,
-  );
+  const tmp = tempXlsxPath();
   await wb.xlsx.writeFile(tmp);
   return tmp;
+}
+
+/**
+ * Rewrite `sourcePath` to a temporary `.xlsx` that keeps *every* sheet, with
+ * per-sheet page setup applied so LibreOffice exports the whole workbook to one
+ * PDF. Each sheet is fitted to a single page (unless `--fit=false`) and oriented
+ * by the explicit `-o/--orientation` or, when none was given, auto from its own
+ * used extent (see autoOrientation). Formulas are frozen exactly as in the
+ * single-sheet export, so no error text reaches the PDF.
+ */
+async function buildWholeWorkbookExport(
+  sourcePath: string,
+  opts: PdfOptions,
+): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  // Same styles sanitation as the single-sheet path (see sanitizeFontFlags).
+  const bytes = (await sanitizedWorkbookBuffer(sourcePath)) as unknown as ArrayBuffer;
+  await wb.xlsx.load(bytes);
+
+  if (wb.worksheets.length === 0) {
+    throw new ExtractError('UNREADABLE_WORKBOOK', `"${sourcePath}" has no sheets.`);
+  }
+
+  // Fit each sheet to a page by default; `--fit=false` opts out (undefined => on).
+  const fit = opts.fit ?? true;
+  for (const ws of wb.worksheets) {
+    flattenFormulas(ws);
+    ws.pageSetup = {
+      ...ws.pageSetup,
+      orientation: opts.orientation ?? autoOrientation(ws),
+      ...(fit ? { fitToPage: true, fitToWidth: 1, fitToHeight: 1 } : {}),
+    };
+  }
+
+  const tmp = tempXlsxPath();
+  await wb.xlsx.writeFile(tmp);
+  return tmp;
+}
+
+/** A unique temp path for the rewritten workbook handed to LibreOffice. */
+function tempXlsxPath(): string {
+  return path.join(
+    os.tmpdir(),
+    `extract-excel-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.xlsx`,
+  );
+}
+
+/** Excel's default column width (character units) and row height (points). */
+const DEFAULT_COL_WIDTH = 8.43;
+const DEFAULT_ROW_HEIGHT = 15;
+
+/**
+ * Choose a page orientation from a sheet's used extent: `landscape` when the
+ * data box is physically wider than it is tall, otherwise `portrait` (so a
+ * taller-than-wide sheet, a square sheet, and an empty sheet all fall to
+ * portrait, matching the requested rule). Column widths (character units) and
+ * row heights (points) are converted to a shared pixel scale so the comparison
+ * reflects how the sheet would actually print.
+ */
+export function autoOrientation(ws: ExcelJS.Worksheet): PageOrientation {
+  const { widthPx, heightPx } = usedExtentPx(ws);
+  return widthPx > heightPx ? 'landscape' : 'portrait';
+}
+
+/**
+ * Approximate the pixel width and height of a sheet's used cell box. A column's
+ * width is in Excel "character" units (~7px per char plus 5px of cell padding
+ * for the default font); a row's height is in points (1pt = 4/3 px at 96 DPI).
+ * Missing sizes fall back to Excel's defaults. Returns zeros for an empty sheet.
+ */
+function usedExtentPx(ws: ExcelJS.Worksheet): { widthPx: number; heightPx: number } {
+  const defaultColWidth = ws.properties?.defaultColWidth ?? DEFAULT_COL_WIDTH;
+  const defaultRowHeight = ws.properties?.defaultRowHeight ?? DEFAULT_ROW_HEIGHT;
+
+  let widthPx = 0;
+  for (let c = 1; c <= ws.columnCount; c++) {
+    widthPx += Math.round((ws.getColumn(c).width ?? defaultColWidth) * 7 + 5);
+  }
+  let heightPx = 0;
+  for (let r = 1; r <= ws.rowCount; r++) {
+    heightPx += (ws.getRow(r).height ?? defaultRowHeight) * (4 / 3);
+  }
+  return { widthPx, heightPx };
 }
 
 /** Resolve the worksheet to export, honoring `--sheet` (case-insensitive). */
@@ -273,6 +371,65 @@ function cleanCellResult(result: unknown): ExcelJS.CellValue {
   // A formula that computes to an empty string renders blank, but 0/false stay.
   if (result === '') return null;
   return result as ExcelJS.CellValue;
+}
+
+/**
+ * Boolean font flags that exceljs reads with its `BooleanXform`, which treats an
+ * element's mere *presence* as `true` and ignores its `val` attribute. A font
+ * that explicitly turns one of these *off* (`<b val="false"/>`, `<i val="0"/>`,
+ * `<strike val="false"/>`, …) — the form LibreOffice and several other producers
+ * emit — is therefore misread as on, then re-serialized as a bare `<b/>`/`<i/>`/
+ * `<strike/>`. LibreOffice honors that and the exported PDF shows bold, italic,
+ * or strikethrough the cells never had. (Underline is parsed by a separate xform
+ * that keeps `val`, so it is unaffected and not listed here.)
+ */
+const DISABLED_FONT_FLAGS = ['b', 'i', 'strike', 'condense', 'extend', 'outline', 'shadow'];
+
+/**
+ * Matches a boolean font flag element whose value is explicitly false — i.e.
+ * `<b val="false"/>`, `<i val='0'/>`, or the rare paired `<strike val="0"></strike>`
+ * form — across either quote style and with optional surrounding whitespace. The
+ * tag name is required to be one of {@link DISABLED_FONT_FLAGS}; genuine
+ * `<b/>` / `<b val="true"/>` carry no false `val` and are left untouched.
+ */
+const DISABLED_FONT_FLAG_RE = new RegExp(
+  `<(${DISABLED_FONT_FLAGS.join('|')})\\s+val=(["'])\\s*(?:0|false)\\s*\\2\\s*(?:/>|></\\1>)`,
+  'gi',
+);
+
+/**
+ * Strip explicitly-disabled boolean font flags out of an `xl/styles.xml`
+ * document so exceljs cannot misread them as enabled (see
+ * {@link DISABLED_FONT_FLAGS}). Operating on the raw XML — before exceljs parses
+ * it — is what preserves real formatting: a genuine `<b/>` (bold actually on)
+ * has no `val` and is kept, while `<b val="false"/>` (bold off) is removed, a
+ * distinction that is already lost once exceljs collapses both to `bold: true`.
+ */
+export function sanitizeFontFlags(stylesXml: string): string {
+  return stylesXml.replace(DISABLED_FONT_FLAG_RE, '');
+}
+
+/**
+ * Read `sourcePath` and return its bytes with `xl/styles.xml` sanitized of
+ * disabled font flags. xlsx is a zip, so the styles part is rewritten in place
+ * and the archive repacked for `wb.xlsx.load`. Any failure to open or rewrite
+ * the zip falls back to the original bytes, so a malformed or unexpected package
+ * still exports rather than throwing.
+ */
+async function sanitizedWorkbookBuffer(sourcePath: string): Promise<Buffer> {
+  const original = fs.readFileSync(path.resolve(sourcePath));
+  try {
+    const zip = await JSZip.loadAsync(original);
+    const entry = zip.file('xl/styles.xml');
+    if (!entry) return original;
+    const xml = await entry.async('string');
+    const sanitized = sanitizeFontFlags(xml);
+    if (sanitized === xml) return original;
+    zip.file('xl/styles.xml', sanitized);
+    return await zip.generateAsync({ type: 'nodebuffer' });
+  } catch {
+    return original;
+  }
 }
 
 /** True when the shell or OS could not locate the given command. */

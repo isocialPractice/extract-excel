@@ -41,7 +41,7 @@ import {
   renderAligned,
 } from '../output/render';
 import { ExtractionResult } from '../engine/extract';
-import { flattenFormulas } from '../output/actions';
+import { flattenFormulas, sanitizeFontFlags, autoOrientation } from '../output/actions';
 import {
   columnToNumber,
   numberToColumn,
@@ -796,6 +796,34 @@ function unitTests(): UnitTest[] {
       },
     },
     {
+      name: 'parser: --pdf is an explicit alias for the pdf target',
+      category: 'parser',
+      opt: 'pdf',
+      run: () => {
+        const cmd = parse(['f.xlsx', '-s', 'Sales', '--pdf', 'report.pdf']) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['pdf'], 'pdf target');
+        assertEqual(cmd.books[0].action.pdf, 'report.pdf', 'pdf path');
+        // Equivalent to --file out.pdf and --action:pdf out.pdf.
+        const viaFile = parse(['f.xlsx', '-s', 'Sales', '-f', 'report.pdf']) as ExtractCommand;
+        assertEqual(viaFile.books[0].action.pdf, 'report.pdf', 'matches --file routing');
+        const viaAction = parse(['f.xlsx', '-s', 'Sales', '--action:pdf', 'report.pdf']) as ExtractCommand;
+        assertEqual(viaAction.books[0].action.pdf, 'report.pdf', 'matches --action routing');
+      },
+    },
+    {
+      name: 'parser: --pdf honors -o/--fit page setup',
+      category: 'parser',
+      opt: 'pdf',
+      run: () => {
+        const cmd = parse([
+          'f.xlsx', '-s', 'Sales', '--pdf', 'report.pdf', '-o', 'landscape', '--fit',
+        ]) as ExtractCommand;
+        assertEqual(cmd.books[0].action.targets, ['pdf'], 'pdf target');
+        assertEqual(cmd.books[0].action.orientation, 'landscape', 'orientation applied');
+        assertEqual(cmd.books[0].action.fit, true, 'fit applied');
+      },
+    },
+    {
       name: 'parser: --file only implies md when .md is the final extension',
       category: 'parser',
       opt: 'file',
@@ -991,6 +1019,73 @@ function unitTests(): UnitTest[] {
         assertEqual(ws.getCell('A6').value, 0, 'zero result preserved');
         assertEqual(ws.getCell('A7').value, null, 'empty-string result blanked');
         assertEqual(ws.getCell('A8').value, false, 'false result preserved');
+      },
+    },
+
+    // --- pdf: strip explicitly-disabled font flags exceljs would misread ---
+    {
+      name: 'pdf: sanitizeFontFlags drops disabled bold/italic/strike, keeps real ones',
+      category: 'output',
+      opt: 'pdf',
+      run: () => {
+        // A font that turns bold, italic, and strike *off* via explicit val.
+        // exceljs would otherwise read every one as enabled.
+        const disabled =
+          '<font><b val="false"/><i val="0"/><strike val="false"/>' +
+          '<sz val="11"/><name val="Calibri"/></font>';
+        const out = sanitizeFontFlags(disabled);
+        assert(!/<b\b/.test(out), 'disabled bold removed');
+        assert(!/<i\b/.test(out), 'disabled italic removed');
+        assert(!/<strike\b/.test(out), 'disabled strike removed');
+        assert(out.includes('<sz val="11"/>'), 'size preserved');
+        assert(out.includes('<name val="Calibri"/>'), 'name preserved');
+
+        // Genuine formatting (no val, or val="true"/"1") must survive untouched.
+        const real = '<font><b/><i val="true"/><strike val="1"/><sz val="11"/></font>';
+        assertEqual(sanitizeFontFlags(real), real, 'real bold/italic/strike kept');
+
+        // Single quotes, the paired-empty form, and odd casing are all handled.
+        const variants = "<font><b val='false'/><i val=\"FALSE\"></i></font>";
+        assertEqual(sanitizeFontFlags(variants), '<font></font>', 'quote/case/paired forms removed');
+
+        // A look-alike tag (e.g. <bottom>) must not be touched.
+        const lookAlike = '<border><bottom val="false"/></border>';
+        assertEqual(sanitizeFontFlags(lookAlike), lookAlike, 'non-font tags untouched');
+      },
+    },
+
+    // --- pdf: per-sheet auto orientation for the whole-workbook export ---
+    {
+      name: 'pdf: autoOrientation picks landscape/portrait from the used extent',
+      category: 'output',
+      opt: 'pdf',
+      run: () => {
+        const wb = new ExcelJS.Workbook();
+
+        // Tall: 2 columns × 40 rows -> taller than wide -> portrait.
+        const tall = wb.addWorksheet('Tall');
+        for (let r = 1; r <= 40; r++) {
+          tall.getRow(r).getCell(1).value = 'x';
+          tall.getRow(r).getCell(2).value = 'y';
+        }
+        assertEqual(autoOrientation(tall), 'portrait', 'tall sheet -> portrait');
+
+        // Wide: 30 columns × 3 rows -> wider than tall -> landscape.
+        const wide = wb.addWorksheet('Wide');
+        for (let c = 1; c <= 30; c++) {
+          for (let r = 1; r <= 3; r++) wide.getRow(r).getCell(c).value = 'v';
+        }
+        assertEqual(autoOrientation(wide), 'landscape', 'wide sheet -> landscape');
+
+        // Empty sheet has no extent -> the tie rule falls to portrait.
+        const empty = wb.addWorksheet('Empty');
+        assertEqual(autoOrientation(empty), 'portrait', 'empty sheet -> portrait');
+
+        // A single wide column (large explicit width) outweighs a few rows.
+        const oneWideCol = wb.addWorksheet('OneWideCol');
+        oneWideCol.getColumn(1).width = 200;
+        for (let r = 1; r <= 3; r++) oneWideCol.getRow(r).getCell(1).value = 'v';
+        assertEqual(autoOrientation(oneWideCol), 'landscape', 'wide column -> landscape');
       },
     },
   ];
