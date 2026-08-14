@@ -32,7 +32,7 @@ covered by `extract-excel --test`.
 - [ ] Preserve Excel number/date formatting (currently numbers stringify and
       dates render ISO-8601).
 - [ ] Configurable CSV dialect (delimiter, quoting, line endings).
-- [ ] `--action:var` multi-line values (currently joined with `; ` to stay
+- [ ] `--action:var` multi-line values (currently joined with `;` to stay
       assignable) — optional base64 / array modes.
 
 ### Extraction
